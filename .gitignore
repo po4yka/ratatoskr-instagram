@@ -1,1 +1,19 @@
-# Repository-specific ignore rules will be added with implementation scaffolding.
+# Rust / Cargo build output
+target/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local scratch: personal Data Export archives, captures, and private media
+/local/
+
+# Editors
+.idea/
+.vscode/
+
+# OS
+.DS_Store
