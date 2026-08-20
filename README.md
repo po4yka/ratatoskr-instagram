@@ -1,10 +1,21 @@
 # Ratatoskr Instagram
 
-`ratatoskr-instagram` is the Instagram account and capture bounded context for Ratatoskr Next. It combines official account access where available with explicit user-initiated captures, public oEmbed resolution, and versioned Data Export imports.
+`ratatoskr-instagram` is the Instagram account and capture bounded context for Ratatoskr. It combines official account access where available with explicit user-initiated captures, public oEmbed resolution, and versioned Data Export imports.
 
 > **Status:** architecture bootstrap. Account connection, capture resolution, import parsers, persistence, and events described below are planned and are not implemented yet.
 
-## Role in Ratatoskr Next
+> [!IMPORTANT]
+> **Ratatoskr is in development.** No database holds data that has to survive a schema change.
+> While this status holds, these two rules replace what the documents below plan:
+>
+> - the API and the database keep their first version. There is no `v2` and no later major
+>   version.
+> - the database has no migrations. One schema definition exists, and a schema change edits it in
+>   place.
+>
+> Only the repository owner changes this status.
+
+## Role in Ratatoskr
 
 Instagram does not provide Ratatoskr with an authoritative API for a personal user's native Saved feed. This service therefore keeps two ingestion lanes separate and records the authority of every item honestly.
 
@@ -99,7 +110,7 @@ Large export archives, media files, screenshots, raw API/oEmbed payloads, and un
 Clients submit captures through `ratatoskr-platform`:
 
 ```http
-POST /v2/captures
+POST /v1/captures
 Idempotency-Key: 018f...
 ```
 
