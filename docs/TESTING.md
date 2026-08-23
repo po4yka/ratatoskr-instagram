@@ -9,8 +9,8 @@ Required tests:
 - Media size/type/authorization/retention behavior.
 - Safe Data Export import: schema detection, parser versions, zip bomb/path traversal, unknown records, duplicate archives, partial assets.
 - Missing-data versus deletion semantics.
-- SQL migrations, outbox/inbox redelivery, privacy deletion, no-secret/content logging.
-- Workspace mobile/extension capture -> Instagram -> Knowledge flow.
+- SQL schema initialization, outbox/inbox redelivery, privacy deletion, no-secret/content logging.
+- Planned workspace mobile/extension capture -> Instagram -> Knowledge flow.
 
 Fixtures are synthetic or user-authorized and scrubbed; no personal account is required in CI.
 

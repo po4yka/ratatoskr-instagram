@@ -17,7 +17,7 @@ The service must never blur those lanes or claim authority the provider does not
 
 ## Current phase
 
-The repository is in architecture bootstrap. Do not assume Rust crates, OAuth flows, oEmbed resolution, import parsers, migrations, or CI commands exist unless they are present in the checkout.
+The repository is in architecture bootstrap. Do not assume Rust crates, OAuth flows, oEmbed resolution, import parsers, a database schema, or CI commands exist unless they are present in the checkout.
 
 When creating initial implementation:
 
@@ -332,7 +332,7 @@ Publish normalized `SocialSource`-compatible events with:
 
 `ratatoskr-knowledge` owns analysis and embeddings. Platform/clients own local collections and presentation. Generic linked articles are delegated to Extractor.
 
-## Persistence and migrations
+## Persistence and schema evolution
 
 Instagram writes only its owned schema.
 
@@ -357,7 +357,7 @@ Rules:
 - no cross-schema writes or foreign keys;
 - raw archives/responses are separated from normalized projections;
 - uniqueness and idempotency constraints reflect provider and capture identities;
-- migrations preserve acquisition/authority provenance;
+- schema changes preserve acquisition/authority provenance;
 - absence in one export or failed resolution never causes unproven deletion;
 - secrets and large blobs use protected storage/reference mechanisms.
 
@@ -437,7 +437,7 @@ When implementation exists, include applicable tests for:
 - absence-in-export never causing deletion;
 - deduplication conflicts;
 - events/outbox/inbox replay;
-- migrations preserving provenance.
+- schema initialization preserving provenance.
 
 Use synthetic/redacted fixtures. Never depend on a live personal Instagram account in normal tests.
 
@@ -452,7 +452,7 @@ Use a workspace changeset when changing:
 - OAuth/callback/scopes;
 - BlobStore/media contracts;
 - Data Export completeness semantics;
-- deployment secrets or migration/cutover behavior.
+- deployment secrets or schema/import cutover behavior.
 
 List producer/consumer compatibility, rollout, rollback, privacy, reprocessing/reindexing, and user-visible authority impact.
 
@@ -480,4 +480,4 @@ A task is complete only when:
 - normalized events preserve provenance;
 - media completeness is reported honestly;
 - relevant security/import/resolution tests pass;
-- contracts, migrations, telemetry, and cross-repository rollout are documented.
+- contracts, schema, telemetry, and cross-repository rollout are documented.

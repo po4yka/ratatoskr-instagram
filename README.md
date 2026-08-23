@@ -10,8 +10,8 @@
 >
 > - the API and the database keep their first version. There is no `v2` and no later major
 >   version.
-> - the database has no migrations. One schema definition exists, and a schema change edits it in
->   place.
+> - the database has no migrations. No schema exists yet. The first persistence change creates one
+>   schema definition, and later schema changes edit it in place.
 >
 > Only the repository owner changes this status.
 
@@ -85,7 +85,7 @@ This distinction is load-bearing. Absence from a future export or failed public 
 
 ## Planned data model
 
-The service owns an `instagram_archive.*` PostgreSQL schema:
+The service will own an `instagram_archive.*` PostgreSQL schema when persistence is implemented:
 
 ```text
 instagram_accounts
@@ -285,7 +285,7 @@ Every capture and import records acquisition method, parser or resolver version,
 
 ## Workspace integration
 
-`ratatoskr-workspace` pins Instagram with compatible social contracts, Platform, Mobile, Browser Extension, Extractor, Knowledge, and client commits. The connector remains independently testable with recorded public-resolution fixtures, synthetic exports, and mock OAuth/API servers.
+Planned: `ratatoskr-workspace` will pin Instagram with compatible social contracts, Platform, Mobile, Browser Extension, Extractor, Knowledge, and client commits. No workspace pin or integration profile exists for this service today. The connector will remain independently testable with recorded public-resolution fixtures, synthetic exports, and mock OAuth/API servers.
 
 ## Project status
 

@@ -63,7 +63,7 @@ ratatoskr-instagram/
 │   └── test-support/
 ├── services/
 │   └── instagram/
-├── migrations/
+├── schema/
 ├── fixtures/
 │   ├── captures/
 │   └── data-exports/
@@ -523,7 +523,7 @@ Metrics avoid raw URLs, handles, captions, or media identifiers as unbounded lab
 
 - OAuth intent and encrypted credential lifecycle;
 - fake public resolver/provider API;
-- SQLx transactions and migrations;
+- SQL schema initialization and transactions;
 - BlobStore raw exports/media;
 - outbox/inbox replay;
 - interrupted import resume.
@@ -537,7 +537,7 @@ Metrics avoid raw URLs, handles, captions, or media identifiers as unbounded lab
 - provider responses with unknown variants;
 - private-content access changes.
 
-### Workspace end-to-end
+### Planned workspace end-to-end
 
 - mobile/browser explicit capture;
 - public resolution and SocialSource indexing;

@@ -1,6 +1,6 @@
 # Instagram connector data model
 
-## Owned schema: `instagram_archive.*`
+## Planned owned schema: `instagram_archive.*`
 
 - `accounts`, encrypted credentials, scopes, capabilities, expiry/status.
 - own-media records/revisions and safe raw blob references.
