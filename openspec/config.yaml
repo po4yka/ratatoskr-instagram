@@ -8,11 +8,9 @@ context: |
 
   Stack: Rust/Tokio, Reqwest/Rustls, OAuth, SQLx/PostgreSQL, safe archive import, BlobStore, NATS, provider fixtures and WireMock, tracing, testcontainers.
 
-  This repository holds no code yet. Its documents describe intent; a change here plans behaviour, and the first code arrives with its own ci.yml, its lint configuration carrying the size limits, and its tests.
+  Implementation plan item 1 is implemented: the `ratatoskr-instagram-archive` service with typed strict configuration (`RATATOSKR__` environment prefix), structured telemetry, operator health routes, typed errors, and the first-version `schema.sql` defining the owned `instagram_archive` schema. Its product gate lives in .github/workflows/ci.yml; DEVELOPMENT.md documents the same command list, and a drift guard fails when the two disagree. Capture intake, public resolution, Data Export import, eventing, and account connection remain planned (items 2-10).
 
-  The current docs-only gate is the fenced block in DEVELOPMENT.md: git diff --check, openspec validate --all --strict, and openspec validate --archived. .github/workflows/openspec.yml runs the two OpenSpec checks in CI. No product ci.yml exists yet; the first product manifest adds one alongside the unchanged OpenSpec checks. .github/workflows/fleet.yml checks that product CI invokes a test and that a Rust or Node manifest has its language-specific lint configuration; it does not prove that CI invokes the linter.
-
-  Development status, binding and overriding anything that plans otherwise: one version only — no v2, no version negotiation, no deprecation window; no database migrations — a schema change edits the schema definition in place; the product is Ratatoskr and never "Ratatoskr Next". Only the repository owner changes this status.
+  Development status, binding and overriding anything that plans otherwise: one version only — no v2, no version negotiation, no deprecation window; no database migrations — a schema change edits schema.sql in place and test databases are created from it; the product is Ratatoskr and never "Ratatoskr Next". Only the repository owner changes this status.
 
   Behaviour visible to more than one repository belongs in the ratatoskr-workspace store, not here.
 

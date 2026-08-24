@@ -1,0 +1,30 @@
+[package]
+name = "ratatoskr-instagram-archive"
+description = "Domain library for the Ratatoskr Instagram bounded context."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[features]
+test-support = []
+
+[dev-dependencies]
+ratatoskr-instagram-archive = { path = ".", features = ["test-support"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

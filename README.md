@@ -2,7 +2,7 @@
 
 `ratatoskr-instagram` is the Instagram account and capture bounded context for Ratatoskr. It combines official account access where available with explicit user-initiated captures, public oEmbed resolution, and versioned Data Export imports.
 
-> **Status:** architecture bootstrap. Account connection, capture resolution, import parsers, persistence, and events described below are planned and are not implemented yet.
+> **Status:** implementation plan item 1 is complete: a Rust service runs locally against PostgreSQL with typed strict configuration, structured telemetry, operator health routes (`/health/live`, `/health/ready`, `/metrics`, `/version`), typed errors, and the first-version `instagram_archive` schema applied at startup. Account connection, capture intake and resolution, Data Export import, and events described below are planned and are not implemented yet.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -10,8 +10,8 @@
 >
 > - the API and the database keep their first version. There is no `v2` and no later major
 >   version.
-> - the database has no migrations. No schema exists yet. The first persistence change creates one
->   schema definition, and later schema changes edit it in place.
+> - the database has no migrations. One schema definition exists, and a schema change edits it in
+>   place.
 >
 > Only the repository owner changes this status.
 
@@ -85,7 +85,7 @@ This distinction is load-bearing. Absence from a future export or failed public 
 
 ## Planned data model
 
-The service will own an `instagram_archive.*` PostgreSQL schema when persistence is implemented:
+The service owns an `instagram_archive.*` PostgreSQL schema. The first-version definition in `schema.sql` declares:
 
 ```text
 instagram_accounts
@@ -289,4 +289,4 @@ Planned: `ratatoskr-workspace` will pin Instagram with compatible social contrac
 
 ## Project status
 
-This README defines the intended Instagram connector and explicit-capture architecture. No provider connection, capture resolver, import parser, or persistence implementation exists yet.
+The process foundation (configuration, telemetry, operator health, typed errors, owned `instagram_archive` schema) is implemented and gated by CI. Account connections, captures, public resolution, imports, media handling, and the event machinery behind those behaviors do not exist yet; the sections above describe the intended Instagram connector architecture. `DEVELOPMENT.md` records the exact local and CI gate commands.

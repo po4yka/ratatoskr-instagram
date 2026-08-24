@@ -1,0 +1,79 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/instagram-archive",
+    "services/instagram-archive",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97" # equals the pinned toolchain; no MSRV promise we cannot check
+license = "BSD-3-Clause"
+repository = "https://github.com/po4yka/ratatoskr-instagram"
+
+[workspace.dependencies]
+ratatoskr-instagram-archive         = { version = "=0.1.0", path = "crates/instagram-archive" }
+
+# ---- async runtime and HTTP ----
+tokio      = { version = "=1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+axum       = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+tower      = { version = "=0.5.3", features = ["util"] }
+http-body-util = "=0.1.5"
+
+# ---- persistence ----
+# No `migrate` feature: the schema is one file, `include_str!`d into the binary by
+# `ratatoskr-instagram-archive`, so a deployment cannot drift from its schema and there is no
+# ledger to record.
+sqlx = { version = "=0.8.6", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls-ring",
+    "postgres",
+    "uuid",
+] }
+
+# ---- configuration and secrets ----
+secrecy = "=0.10.3"
+
+# ---- telemetry ----
+tracing                     = "=0.1.44"
+tracing-subscriber          = { version = "=0.3.23", default-features = false, features = ["std", "registry", "env-filter", "fmt", "json"] }
+metrics                     = "=0.24.6"
+metrics-exporter-prometheus = { version = "=0.18.3", default-features = false }
+
+# ---- identifiers ----
+# `v7` because ratatoskr-contracts mints UUIDv7 for internally minted identity, and the database
+# stores the same bytes; schema.sql deliberately carries no id DEFAULT that could produce v4.
+uuid = { version = "=1.24.1", features = ["v7"] }
+
+# ---- serialization and errors ----
+serde      = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+thiserror  = "=2.0.20"
+
+[workspace.lints.rust]
+unsafe_code                   = "forbid"
+missing_docs                  = "deny"
+missing_debug_implementations = "deny"
+unreachable_pub               = "deny"
+
+[workspace.lints.clippy]
+pedantic           = { level = "warn", priority = -1 }
+unwrap_used        = "deny"
+expect_used        = "deny"
+panic              = "deny"
+missing_errors_doc = "deny"
+missing_panics_doc = "deny"
+dbg_macro          = "deny"
+todo               = "deny"
+print_stdout       = "deny"     # startup failures go to stderr; a stray println bypasses the subscriber
+# `panic`, `unwrap_used` and `expect_used` above close every EXPLICIT panic path and leave the most
+# common implicit ones open. Both of these are `allow` by default and in `clippy::restriction`, so
+# `pedantic` does not enable them. Adopted at zero violations in a fresh tree.
+indexing_slicing   = "deny"     # `v[i]` and `&s[a..b]` panicking out of bounds
+string_slice       = "deny"     # `&s[..n]` panicking because n is not a UTF-8 char boundary
+
+# Release keeps the default `unwind` panic strategy ON PURPOSE: `panic = "abort"` silently disables
+# catch-unwind-based error responses.
+[profile.release]
+debug = 1 # line tables only: a usable backtrace in the ERROR log, no full debuginfo

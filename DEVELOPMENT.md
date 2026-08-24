@@ -1,24 +1,21 @@
 # Developing Ratatoskr Instagram
 
-> Status: Proposed  
-> Last reviewed: 2026-08-20
+> Status: Active development
+> Last reviewed: 2026-08-25
 
-Architecture bootstrap: account OAuth, capture resolver, Data Export importer, schema, and provider adapters are not implemented.
+Implementation plan item 1 is implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `instagram_archive` schema applied at startup. Account OAuth, capture intake and resolution, Data Export import, eventing, and provider adapters are not implemented yet.
 
 ## Intended toolchain
 
-Rust/Tokio, Reqwest/Rustls, OAuth, SQLx/PostgreSQL, safe archive import, BlobStore, NATS, provider fixtures/WireMock, tracing, and testcontainers.
+Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, tracing, Prometheus. Planned for later items: Reqwest/Rustls, OAuth, safe archive import, BlobStore, NATS, provider fixtures/WireMock, testcontainers.
 
 ## Code size limits
 
-There is no code here yet, so no limit is enforced yet. The commit that brings the first manifest brings the configuration that carries the limits with it: `clippy.toml` beside a `Cargo.toml`, `eslint.config.js` beside a `package.json`. `fleet.yml` fails the gate when a manifest arrives without one, so the rule has a check behind it and not only this paragraph.
-
-`ratatoskr-workspace/docs/QUALITY_GATES.md` holds the numbers the repositories with code use today, the command that measured each one, and the limits that were rejected with the reason. Read it before you choose numbers, then measure this tree. Each limit is set at the worst case the tree already has, so that the check fails on a regression and not on work that has not been done yet.
+`clippy.toml` beside the root `Cargo.toml` carries the limits: functions at most 100 lines of code, signatures at most 7 arguments, block nesting at most 5 deep, plus `allow-unwrap-in-tests` and the disallowed direct environment reads outside the config module. The numbers are the fresh-tree baseline, not an ambition; an exception is a site-level `#[expect]` with a reason. The gate also enforces the one limit clippy cannot express: no tracked `.rs` file may exceed 850 lines.
 
 ## Current validation
 
-This repository has no product manifest or `.github/workflows/ci.yml` yet. Run the current docs-only
-gate locally:
+The repository has two gates. The docs-only/OpenSpec gate stays unchanged:
 
 ```bash
 git diff --check
@@ -26,11 +23,39 @@ openspec validate --all --strict
 openspec validate --archived
 ```
 
-`.github/workflows/openspec.yml` runs the two OpenSpec commands in CI. The first-manifest rule in
-`.github/workflows/fleet.yml` requires the first product manifest to add a product `ci.yml` that
-invokes a test. For a Rust or Node manifest, it also requires `clippy.toml` or
-`eslint.config.js`, respectively; it does not prove that product CI invokes the linter. The
-docs-only/OpenSpec gate remains in addition to product CI.
+`.github/workflows/openspec.yml` runs the two OpenSpec commands in CI; `.github/workflows/fleet.yml`
+keeps checking its invariants now that a manifest exists.
+
+### Rust — also the CI gate
+
+```bash
+cargo fetch --locked
+cargo deny --locked check
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo build --workspace --locked
+cargo test --workspace --locked
+cargo test --workspace --locked --doc
+cargo build --workspace --locked --release
+```
+
+`.github/workflows/ci.yml` runs this list against PostgreSQL 17 (service container in CI,
+`compose.yaml` on a laptop: user/password/database `instagram`, published on `127.0.0.1:5436`). The
+suite creates disposable databases from the embedded schema per test; without the server the suite
+fails rather than skips. CI additionally runs the 850-line file ratchet and a guard asserting this
+command list is byte-identical to `.github/workflows/ci.yml`.
+
+## Local run
+
+```bash
+docker compose up -d
+cargo run -p ratatoskr-instagram-archive-service
+# operator plane on 127.0.0.1:9082: /health/live /health/ready /metrics /version
+```
+
+`RATATOSKR__STORAGE__DATABASE_URL=postgres://instagram:instagram@127.0.0.1:5436/instagram` is
+required to start; `<binary> check-config` validates configuration without binding (exit 78 when
+invalid).
 
 ## Workflow
 

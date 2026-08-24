@@ -1,0 +1,33 @@
+[package]
+name = "ratatoskr-instagram-archive-service"
+description = "Ratatoskr Instagram Archive service process."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "ratatoskr_instagram_archive_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ratatoskr-instagram-archive"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+ratatoskr-instagram-archive = { path = "../../crates/instagram-archive" }
+secrecy.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+ratatoskr-instagram-archive = { path = "../../crates/instagram-archive", features = ["test-support"] }
+tower.workspace = true
+
+[lints]
+workspace = true
