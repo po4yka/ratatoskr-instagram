@@ -155,7 +155,8 @@ create table instagram_archive.media (
         check (media_type in ('image', 'video', 'carousel', 'reel', 'story')),
     constraint media_acquisition_method_check
         check (acquisition_method in
-            ('official_api', 'share_extension', 'browser_extension', 'data_export', 'legacy_import')),
+            ('official_api', 'share_extension', 'browser_extension', 'public_resolution',
+             'data_export', 'legacy_import')),
     constraint media_saved_authority_check
         check (saved_authority in
             ('explicit_user_capture', 'export_observation', 'authoritative_platform_state',
@@ -217,7 +218,8 @@ create table instagram_archive.captures (
         references instagram_archive.media (media_id),
     constraint captures_acquisition_method_check
         check (acquisition_method in
-            ('official_api', 'share_extension', 'browser_extension', 'data_export', 'legacy_import')),
+            ('official_api', 'share_extension', 'browser_extension', 'public_resolution',
+             'data_export', 'legacy_import')),
     constraint captures_saved_authority_check
         check (saved_authority in
             ('explicit_user_capture', 'export_observation', 'authoritative_platform_state',

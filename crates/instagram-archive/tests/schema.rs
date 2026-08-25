@@ -188,6 +188,45 @@ async fn unknown_acquisition_method_is_refused_and_documented_values_are_accepte
 }
 
 #[tokio::test]
+async fn public_resolution_is_accepted_on_provenance_tables() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+
+    let media = sqlx::query(
+        "insert into instagram_archive.media \
+         (media_id, permalink, media_type, acquisition_method, saved_authority, upstream_status) \
+         values ($1, $2, 'image', 'public_resolution', 'explicit_user_capture', 'available')",
+    )
+    .bind(Uuid::now_v7())
+    .bind("https://www.instagram.com/p/example/")
+    .execute(pool)
+    .await;
+    assert!(
+        media.is_ok(),
+        "public_resolution must be accepted on media: {:?}",
+        media.err().map(|e| e.to_string())
+    );
+
+    let capture = sqlx::query(INSERT_CAPTURE)
+        .bind(Uuid::now_v7())
+        .bind(Uuid::now_v7())
+        .bind("https://www.instagram.com/reel/example/")
+        .bind("public_resolution")
+        .bind("explicit_user_capture")
+        .bind("telegram")
+        .bind("accepted")
+        .execute(pool)
+        .await;
+    assert!(
+        capture.is_ok(),
+        "public_resolution must be accepted on captures: {:?}",
+        capture.err().map(|e| e.to_string())
+    );
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
 async fn catalog_shows_zero_cross_schema_foreign_keys() {
     let test = TestDatabase::create().await.expect("a fresh test database");
     let pool = test.database.pool();

@@ -68,7 +68,7 @@ It does not run hidden browser login automation, scrape a user's private Saved f
 Every normalized source records acquisition method and saved-state authority:
 
 ```text
-acquisition = OfficialApi | ShareExtension | BrowserExtension | DataExport | LegacyImport
+acquisition = OfficialApi | ShareExtension | BrowserExtension | PublicResolution | DataExport | LegacyImport
 saved_authority = AuthoritativePlatformState | ExplicitUserCapture | ExportObservation | LegacyObservation
 ```
 
@@ -81,7 +81,7 @@ saved_authority = ExplicitUserCapture
 native_saved_state = Unknown
 ```
 
-This distinction is load-bearing. Absence from a future export or failed public resolution does not prove the user removed the item from Instagram or Ratatoskr.
+This distinction is load-bearing. Absence from a future export or failed public resolution does not prove the user removed the item from Instagram or Ratatoskr. The full matrix of acquisition modes, support statuses, and authority ceilings lives in `docs/CAPABILITY_MATRIX.md`.
 
 ## Planned data model
 

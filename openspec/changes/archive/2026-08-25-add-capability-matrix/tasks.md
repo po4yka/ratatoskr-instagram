@@ -1,0 +1,17 @@
+## 1. Failing tests
+
+- [x] 1.1 Add `crates/instagram-archive/tests/capability.rs` with tests named for the `capability-model` scenarios, against a skeleton `src/capability.rs` whose lookups return placeholder values so failures are assertion-level: each of the five modes resolves with its documented wire-method set, authority ceiling, and an explicit support status; no mode reports `Supported`; native Saved-list synchronization reports `NotSupported` with the documented reason; only `OwnAccountSync` carries `authoritative_platform_state`; the local acquisition-method and saved-authority sets equal the recorded `ratatoskr-social-contracts@361fe94` vocabularies with every contract method owned by exactly one mode; collapsing observations keeps `private` away from `deleted`; applying any observation to any preservation state changes nothing. Also add `public_resolution_is_accepted_on_provenance_tables` to `tests/schema.rs`, failing today because both CHECKs refuse the value. Verification: `cargo test -p ratatoskr-instagram-archive --test capability --locked` fails on the stated assertions and `cargo test -p ratatoskr-instagram-archive --test schema --locked public_resolution --locked` fails on the CHECK violation.
+- [x] 1.2 Widen the `media_acquisition_method_check` and `captures_acquisition_method_check` CHECK vocabularies in `schema.sql` to include `public_resolution`, keeping every other declaration untouched. Verification: the new schema scenario turns green while the rest of `--test schema` stays green.
+
+## 2. Capability constants
+
+- [x] 2.1 Implement `src/capability.rs` until green: `AcquisitionMode`, `SupportStatus`, `SavedAuthority`, `UpstreamStatus`, `AvailabilityObservationKind`, `PreservationState`, per-mode capability lookup (`wire_methods`, `authority_ceiling`, support status), `NATIVE_SAVED_LIST_SYNC` with its reason string, observation-to-media-status collapse, and `retention_after_observation`; export through `lib.rs`. Verification: `cargo test -p ratatoskr-instagram-archive --test capability --locked` green.
+
+## 3. Alignment review and documentation
+
+- [x] 3.1 Write `docs/CAPABILITY_MATRIX.md`: the matrix (mode × support × wire methods × authority ceiling), the native-Saved non-capability, authority rules in prose, upstream-versus-preservation boundary, and the alignment review against `ratatoskr-social-contracts@361fe94` including the fixed `public_resolution` gap and remaining gaps with dispositions (contracts crate dependency deferred to event publishing; `CaptureCompleteness` consumed at import time). Update the README.md authority summary to list `PublicResolution`. This task cannot start from a failing test: documentation.
+- [x] 3.2 Confirm every spec scenario added by this change names the test that executes it and that no documented behavior contradicts README.md or DEVELOPMENT.md; fix prose drift found. This task cannot start from a failing test: documentation consistency.
+
+## 4. Full gate
+
+- [x] 4.1 Run the complete gate from DEVELOPMENT.md on a clean tree — `git diff --check`, `openspec validate --all --strict`, `openspec validate --archived`, `cargo fetch --locked`, `cargo deny --locked check`, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build --workspace --locked`, `cargo test --workspace --locked`, `cargo test --workspace --locked --doc`, `cargo build --workspace --locked --release` — and record the results. Verification: every command exits zero.
