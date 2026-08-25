@@ -5,8 +5,8 @@
 //!
 //! Sequence, in this order and no other: load configuration, install
 //! telemetry, refuse to start without a database, connect, apply the schema,
-//! bind the operator listener, mark readiness — then serve until SIGTERM or
-//! SIGINT and drain within the configured bound.
+//! bind both listeners (operator and product), mark readiness — then serve
+//! until SIGTERM or SIGINT and drain within the configured bound.
 //!
 //! Exit codes: `0` clean run; `1` runtime startup failure; `78`
 //! (`EX_CONFIG`) configuration unreadable or invalid.
@@ -105,7 +105,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
     })?;
 
     let runtime = Arc::new(RuntimeState::new());
-    let listener = tokio::net::TcpListener::bind(config.admin.listen_address)
+    let admin_listener = tokio::net::TcpListener::bind(config.admin.listen_address)
         .await
         .map_err(|error| {
             tracing::error!(
@@ -115,73 +115,118 @@ async fn tokio_main() -> Result<(), ExitCode> {
             );
             ExitCode::FAILURE
         })?;
+    let api_listener = tokio::net::TcpListener::bind(config.api.listen_address)
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                bind = %config.api.listen_address,
+                %error,
+                "the product listener could not bind"
+            );
+            ExitCode::FAILURE
+        })?;
 
     // The first probe happens before readiness flips, so the process never
     // reports itself ready over an unverified dependency.
     let prober = spawn_database_prober(database.clone(), Arc::clone(&runtime));
     runtime.mark_startup_complete();
-    tracing::info!(admin = %config.admin.listen_address, "startup complete");
+    tracing::info!(
+        admin = %config.admin.listen_address,
+        api = %config.api.listen_address,
+        "startup complete"
+    );
 
     let metrics_handle = guard.metrics_handle();
-    let serve_result = serve_admin(
-        listener,
-        Arc::clone(&runtime),
-        database,
-        move || metrics_handle.render(),
-        Duration::from_millis(config.limits.shutdown_timeout_ms),
-    )
-    .await;
-
+    let shutdown_bound = Duration::from_millis(config.limits.shutdown_timeout_ms);
+    let (admin_result, api_result) = tokio::join!(
+        serve_admin(
+            admin_listener,
+            Arc::clone(&runtime),
+            move || metrics_handle.render(),
+            shutdown_bound,
+        ),
+        serve_product(api_listener, database.clone(), shutdown_bound),
+    );
     prober.abort();
+    database.close().await;
 
-    match serve_result {
-        Ok(()) => {
+    match (admin_result, api_result) {
+        (Ok(()), Ok(())) => {
             guard.shutdown();
             Ok(())
         }
-        Err(error) => {
-            tracing::error!(%error, "the operator server failed");
+        (admin_result, api_result) => {
+            for (plane, result) in [("operator", admin_result), ("product", api_result)] {
+                if let Err(error) = result {
+                    tracing::error!(%error, "the {plane} server failed");
+                }
+            }
             Err(ExitCode::FAILURE)
         }
     }
 }
 
-async fn serve_admin(
+/// Serves one plane until its server stops or a signal arrives, draining
+/// within the bound either way. The shared pool is closed by the caller.
+async fn serve_plane(
+    plane: &'static str,
     listener: tokio::net::TcpListener,
-    runtime: Arc<RuntimeState>,
-    database: Database,
-    render_metrics: impl Fn() -> String + Send + Sync + 'static,
+    router: axum::Router,
+    on_signal: impl Fn(),
     shutdown_timeout: Duration,
 ) -> Result<(), String> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let server = axum::serve(
-        listener,
-        ratatoskr_instagram_archive_service::admin_router(runtime.clone(), render_metrics),
-    )
-    .with_graceful_shutdown(async move {
-        let _ignored = shutdown_rx.await;
-    })
-    .into_future();
+    let server = axum::serve(listener, router)
+        .with_graceful_shutdown(async move {
+            let _ignored = shutdown_rx.await;
+        })
+        .into_future();
     tokio::pin!(server);
     tokio::select! {
         result = &mut server => {
-            database.close().await;
             result.map_err(|error| error.to_string())
         }
         result = shutdown_signal() => {
             result.map_err(|error| error.to_string())?;
-            // Readiness fails immediately; the listener stays open through
-            // the drain window so in-flight requests finish.
-            runtime.begin_draining();
+            on_signal();
             let _ignored = shutdown_tx.send(());
             if tokio::time::timeout(shutdown_timeout, &mut server).await.is_err() {
-                database.close().await;
-                return Err("the operator server did not stop within the shutdown bound".to_owned());
+                return Err(format!("the {plane} server did not stop within the shutdown bound"));
             }
-            database.close().await;
             Ok(())
         }
     }
+}
+
+/// The operator plane: health, readiness, metrics, version.
+async fn serve_admin(
+    listener: tokio::net::TcpListener,
+    runtime: Arc<RuntimeState>,
+    render_metrics: impl Fn() -> String + Send + Sync + 'static,
+    shutdown_timeout: Duration,
+) -> Result<(), String> {
+    let router =
+        ratatoskr_instagram_archive_service::admin_router(Arc::clone(&runtime), render_metrics);
+    serve_plane(
+        "operator",
+        listener,
+        router,
+        // Readiness fails immediately; the listener stays open through the
+        // drain window so in-flight requests finish.
+        || runtime.begin_draining(),
+        shutdown_timeout,
+    )
+    .await
+}
+
+/// The product plane: capture intake for platform callers.
+async fn serve_product(
+    listener: tokio::net::TcpListener,
+    database: Database,
+    shutdown_timeout: Duration,
+) -> Result<(), String> {
+    let router = ratatoskr_instagram_archive_service::product_router(database);
+    serve_plane("product", listener, router, || (), shutdown_timeout).await
 }
 
 /// Copies the database answer into readiness forever.

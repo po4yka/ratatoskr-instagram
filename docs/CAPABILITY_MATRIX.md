@@ -6,11 +6,11 @@ The monolith resolved public embeds and took manual captures without a capabilit
 
 ## The matrix
 
-No lane is implemented yet (plan item 1 shipped the service skeleton). Every mode therefore reports `Planned`, and the matrix is a commitment device: an implementation item must flip its own row's status with a reviewed test change before any code path can claim it.
+`ExplicitCapture` is implemented (plan item 3) and reports `Supported`; the remaining lanes report `Planned`, and the matrix stays a commitment device: an implementation item must flip its own row's status with a reviewed test change before any code path can claim it.
 
 | Mode | Status | Wire acquisition methods | Authority ceiling |
 |---|---|---|---|
-| `ExplicitCapture` | Planned | `share_extension`, `browser_extension` | `explicit_user_capture` |
+| `ExplicitCapture` | Supported | `share_extension`, `browser_extension` | `explicit_user_capture` |
 | `PublicResolution` | Planned | `public_resolution` | `explicit_user_capture` |
 | `OwnAccountSync` | Planned | `official_api` | `authoritative_platform_state` |
 | `DataExport` | Planned | `data_export` | `export_observation` |

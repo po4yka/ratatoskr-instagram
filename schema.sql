@@ -199,8 +199,9 @@ comment on table instagram_archive.media_relations is
 -- ---------------------------------------------------------------------------------------------
 --
 -- An explicit Ratatoskr capture proves the user saved an item TO Ratatoskr at captured_at. It does
--- not prove membership in any native list. Deduplication keys arrive with capture intake (plan
--- item 3) and extend this definition in place.
+-- not prove membership in any native list. Capture identity is the pair (user_ref, canonical_url):
+-- a repeated delivery of the same share by the same user reuses the existing row instead of
+-- creating a second one.
 
 create table instagram_archive.captures (
     capture_id         uuid        primary key,
@@ -212,6 +213,7 @@ create table instagram_archive.captures (
     client_source      text        not null,
     status             text        not null,
     note               text,
+    client_idempotency_key text,
     captured_at        timestamptz not null,
     created_at         timestamptz not null default now(),
     constraint captures_media_id_fkey foreign key (media_id)
@@ -228,11 +230,14 @@ create table instagram_archive.captures (
         check (client_source in
             ('ios_share_extension', 'android_share_target', 'browser_extension', 'telegram')),
     constraint captures_status_check
-        check (status in ('accepted', 'resolved', 'unavailable', 'failed'))
+        check (status in ('accepted', 'resolved', 'unavailable', 'failed')),
+    constraint captures_user_canonical_key unique (user_ref, canonical_url)
 );
 
 comment on table instagram_archive.captures is
-    'Explicit user captures. media_id stays open while the item is unresolved or unavailable.';
+    'Explicit user captures. media_id stays open while the item is unresolved or unavailable. '
+    '(user_ref, canonical_url) is the deduplicating identity; client_idempotency_key records the '
+    'platform operation key for correlation and never participates in identity.';
 
 comment on constraint captures_acquisition_method_check on instagram_archive.captures is
     'How the capture reached this service. Closed vocabulary; enforced by the database.';

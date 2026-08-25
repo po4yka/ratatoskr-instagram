@@ -29,6 +29,7 @@ sqlx = { version = "=0.8.6", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls-ring",
     "postgres",
+    "time",
     "uuid",
 ] }
 
@@ -44,12 +45,17 @@ metrics-exporter-prometheus = { version = "=0.18.3", default-features = false }
 # ---- identifiers ----
 # `v7` because ratatoskr-contracts mints UUIDv7 for internally minted identity, and the database
 # stores the same bytes; schema.sql deliberately carries no id DEFAULT that could produce v4.
-uuid = { version = "=1.24.1", features = ["v7"] }
+uuid = { version = "=1.24.1", features = ["v7", "serde"] }
 
 # ---- serialization and errors ----
 serde      = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 thiserror  = "=2.0.20"
+
+# ---- instants ----
+# RFC 3339 capture timestamps; `serde-well-known` powers the HTTP grammar's
+# `captured_at` parsing at the service boundary.
+time = { version = "=0.3.55", features = ["serde", "serde-well-known"] }
 
 [workspace.lints.rust]
 unsafe_code                   = "forbid"

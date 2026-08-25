@@ -251,6 +251,110 @@ async fn catalog_shows_zero_cross_schema_foreign_keys() {
     test.cleanup().await.expect("cleanup must drop");
 }
 
+async fn insert_capture(
+    pool: &sqlx::PgPool,
+    capture_id: Uuid,
+    user_ref: Uuid,
+    canonical_url: &str,
+) -> sqlx::Result<sqlx::postgres::PgQueryResult> {
+    sqlx::query(INSERT_CAPTURE)
+        .bind(capture_id)
+        .bind(user_ref)
+        .bind(canonical_url)
+        .bind("share_extension")
+        .bind("explicit_user_capture")
+        .bind("ios_share_extension")
+        .bind("accepted")
+        .execute(pool)
+        .await
+}
+
+#[tokio::test]
+async fn duplicate_user_and_canonical_url_pair_is_refused_by_uniqueness() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+    let user = Uuid::now_v7();
+    let url = "https://www.instagram.com/p/DHcxI7hpS5t/";
+
+    insert_capture(pool, Uuid::now_v7(), user, url)
+        .await
+        .expect("the first capture for the pair inserts");
+    let duplicate = insert_capture(pool, Uuid::now_v7(), user, url).await;
+
+    let error = duplicate.expect_err("a duplicate (user_ref, canonical_url) must be refused");
+    assert!(
+        error.to_string().contains("captures_user_canonical_key"),
+        "the named uniqueness constraint must reject it: {error}"
+    );
+
+    // Distinct pairs are not duplicates.
+    insert_capture(
+        pool,
+        Uuid::now_v7(),
+        user,
+        "https://www.instagram.com/reel/DHab_c9-x/",
+    )
+    .await
+    .expect("same user, different URL inserts");
+    insert_capture(pool, Uuid::now_v7(), Uuid::now_v7(), url)
+        .await
+        .expect("different user, same URL inserts");
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
+async fn captures_carry_a_nullable_client_idempotency_key() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+
+    let present: Option<String> = sqlx::query_scalar(
+        "select column_name from information_schema.columns \
+         where table_schema = 'instagram_archive' and table_name = 'captures' \
+           and column_name = 'client_idempotency_key'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the catalog query answers");
+    assert!(
+        present.is_some(),
+        "captures.client_idempotency_key must exist for platform correlation"
+    );
+
+    let capture_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into instagram_archive.captures \
+         (capture_id, user_ref, canonical_url, acquisition_method, saved_authority, \
+          client_source, status, captured_at, client_idempotency_key) \
+         values ($1, $2, $3, $4, $5, $6, $7, now(), $8)",
+    )
+    .bind(capture_id)
+    .bind(Uuid::now_v7())
+    .bind("https://www.instagram.com/p/DHcxI7hpS5t/")
+    .bind("share_extension")
+    .bind("explicit_user_capture")
+    .bind("ios_share_extension")
+    .bind("accepted")
+    .bind("018f1a2b-3c4d-5e6f-8a9b-0c1d2e3f4a5b")
+    .execute(pool)
+    .await
+    .expect("a capture with a client idempotency key inserts");
+    let stored: Option<String> = sqlx::query_scalar(
+        "select client_idempotency_key from instagram_archive.captures where capture_id = $1",
+    )
+    .bind(capture_id)
+    .fetch_one(pool)
+    .await
+    .expect("the stored row is readable");
+    assert_eq!(
+        stored.as_deref(),
+        Some("018f1a2b-3c4d-5e6f-8a9b-0c1d2e3f4a5b"),
+        "the client key round-trips"
+    );
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
 #[tokio::test]
 async fn harness_databases_are_isolated_and_cleanup_drops_them() {
     const INSERT_ACCOUNT: &str = "insert into instagram_archive.accounts \

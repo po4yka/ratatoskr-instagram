@@ -46,6 +46,10 @@ fn spawn_service(database_url: &str, admin_port: u16) -> Child {
             "RATATOSKR__ADMIN__LISTEN_ADDRESS",
             format!("127.0.0.1:{admin_port}"),
         )
+        .env(
+            "RATATOSKR__API__LISTEN_ADDRESS",
+            format!("127.0.0.1:{}", free_port()),
+        )
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

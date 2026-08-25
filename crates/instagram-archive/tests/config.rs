@@ -10,10 +10,28 @@ fn empty_environment_yields_loopback_default_and_no_database_url() {
         .expect("an empty environment must be valid");
 
     assert_eq!(config.admin.listen_address.to_string(), "127.0.0.1:9082");
+    assert_eq!(config.api.listen_address.to_string(), "127.0.0.1:9083");
     assert!(config.storage.database_url.is_none());
     assert_eq!(config.limits.database_connections, 8);
     assert_eq!(config.limits.database_acquire_timeout_ms, 5_000);
     assert_eq!(config.limits.shutdown_timeout_ms, 10_000);
+}
+
+#[test]
+fn api_listen_address_override_is_honored_and_non_loopback_refused() {
+    let config = Config::from_environment([("RATATOSKR__API__LISTEN_ADDRESS", "127.0.0.1:9183")])
+        .expect("a loopback override must load");
+    assert_eq!(config.api.listen_address.to_string(), "127.0.0.1:9183");
+
+    let error = Config::from_environment([("RATATOSKR__API__LISTEN_ADDRESS", "10.0.0.9:9183")])
+        .expect_err("the product listener is loopback-only like the operator one");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("RATATOSKR__API__LISTEN_ADDRESS"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("loopback"), "{rendered}");
+    assert!(!rendered.contains("10.0.0.9"), "values never render");
 }
 
 #[test]

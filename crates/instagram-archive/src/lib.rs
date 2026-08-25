@@ -11,9 +11,14 @@
 /// The capability matrix: acquisition modes, support status, authority
 /// ceilings, and the upstream-versus-preservation boundary.
 pub mod capability;
+/// Explicit capture intake: submission identity, provenance, and the
+/// unavailable fallback.
+pub mod capture;
 pub mod config;
 /// The owned `PostgreSQL` pool and the embedded `instagram_archive` schema.
 pub mod database;
+/// Canonicalization of client-delivered Instagram URLs into stable permalinks.
+pub mod permalink;
 pub mod telemetry;
 
 pub use capability::{

@@ -17,16 +17,20 @@ path = "src/main.rs"
 
 [dependencies]
 axum.workspace = true
+metrics.workspace = true
 ratatoskr-instagram-archive = { path = "../../crates/instagram-archive" }
 secrecy.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
 ratatoskr-instagram-archive = { path = "../../crates/instagram-archive", features = ["test-support"] }
+serde_json.workspace = true
 tower.workspace = true
 
 [lints]

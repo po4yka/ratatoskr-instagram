@@ -3,7 +3,7 @@
 > Status: Active development
 > Last reviewed: 2026-08-25
 
-Implementation plan item 1 is implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `instagram_archive` schema applied at startup. Account OAuth, capture intake and resolution, Data Export import, eventing, and provider adapters are not implemented yet.
+Implementation plan items 1–3 are implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `instagram_archive` schema applied at startup; plus the explicit capture intake — permalink canonicalization, idempotent capture identity on `(user_ref, canonical_url)`, the unavailable fallback record, and `POST /v1/captures` on a second loopback listener. Public resolution, account OAuth, Data Export import, eventing, and provider adapters are not implemented yet.
 
 ## Intended toolchain
 
@@ -51,11 +51,14 @@ command list is byte-identical to `.github/workflows/ci.yml`.
 docker compose up -d
 cargo run -p ratatoskr-instagram-archive-service
 # operator plane on 127.0.0.1:9082: /health/live /health/ready /metrics /version
+# product plane on 127.0.0.1:9083: POST /v1/captures
 ```
 
 `RATATOSKR__STORAGE__DATABASE_URL=postgres://instagram:instagram@127.0.0.1:5436/instagram` is
 required to start; `<binary> check-config` validates configuration without binding (exit 78 when
-invalid).
+invalid). Both listeners bind loopback only; the product plane trusts its caller to name the acting
+`user_ref` because user authentication lives in `ratatoskr-platform`, so opening it beyond loopback
+is a deployment decision to make together with that boundary moving.
 
 ## Workflow
 

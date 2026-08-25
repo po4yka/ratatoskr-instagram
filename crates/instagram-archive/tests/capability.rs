@@ -105,6 +105,9 @@ fn each_mode_resolves_to_its_documented_capability() {
 #[test]
 fn no_mode_reports_supported_while_its_lane_is_unimplemented() {
     for mode in AcquisitionMode::ALL {
+        if mode == AcquisitionMode::ExplicitCapture {
+            continue; // implemented by plan item 3; see the dedicated test below.
+        }
         let status = mode.capability().status;
         assert_ne!(
             status,
@@ -113,6 +116,26 @@ fn no_mode_reports_supported_while_its_lane_is_unimplemented() {
         );
         assert_eq!(status, SupportStatus::Planned);
     }
+}
+
+#[test]
+fn implemented_explicit_capture_lane_reports_support_with_unchanged_terms() {
+    let capability = AcquisitionMode::ExplicitCapture.capability();
+    assert_eq!(
+        capability.status,
+        SupportStatus::Supported,
+        "the explicit-capture lane is exercisable once its plan item lands"
+    );
+    assert_eq!(
+        capability.wire_methods(),
+        &["share_extension", "browser_extension"],
+        "support changes no documented wire vocabulary"
+    );
+    assert_eq!(
+        capability.authority_ceiling,
+        SavedAuthority::ExplicitUserCapture,
+        "support never raises the authority ceiling"
+    );
 }
 
 #[test]

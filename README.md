@@ -2,7 +2,7 @@
 
 `ratatoskr-instagram` is the Instagram account and capture bounded context for Ratatoskr. It combines official account access where available with explicit user-initiated captures, public oEmbed resolution, and versioned Data Export imports.
 
-> **Status:** implementation plan item 1 is complete: a Rust service runs locally against PostgreSQL with typed strict configuration, structured telemetry, operator health routes (`/health/live`, `/health/ready`, `/metrics`, `/version`), typed errors, and the first-version `instagram_archive` schema applied at startup. Account connection, capture intake and resolution, Data Export import, and events described below are planned and are not implemented yet.
+> **Status:** implementation plan items 1–3 are complete: a Rust service runs locally against PostgreSQL with typed strict configuration, structured telemetry, operator health routes (`/health/live`, `/health/ready`, `/metrics`, `/version`), typed errors, and the first-version `instagram_archive` schema applied at startup. Explicit capture intake is live: permalink canonicalization across delivered URL forms, idempotent capture identity on `(user_ref, canonical_url)`, truthful unavailable-fallback records, and a `POST /v1/captures` product plane on its own loopback listener (`127.0.0.1:9083` by default). Public resolution, account connection, Data Export import, and events described below are planned and are not implemented yet.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -116,6 +116,7 @@ Idempotency-Key: 018f...
 
 ```json
 {
+  "user_ref": "018f...",
   "platform": "instagram",
   "canonical_url": "https://www.instagram.com/reel/...",
   "captured_at": "2026-08-17T10:30:00+04:00",
@@ -125,15 +126,16 @@ Idempotency-Key: 018f...
 }
 ```
 
-Platform creates an operation and publishes a typed command. Instagram:
+The intake surface is implemented on this service's product listener (`POST /v1/captures`); `ratatoskr-platform` is its caller, and `collection_ids` stay platform/client data this service never owns. Instagram:
 
-1. validates and canonicalizes the supported URL shape;
-2. deduplicates the explicit capture using the idempotency and canonical identity;
-3. resolves the public representation through an official supported surface;
-4. stores raw evidence and normalized metadata;
-5. reports partial or unavailable status honestly;
-6. publishes `social.source.upserted.v1`;
-7. lets Knowledge analyse the normalized source asynchronously.
+1. validates and canonicalizes the supported URL shape into one stable permalink (`https://www.instagram.com/{p|reel|tv}/{shortcode}/`);
+2. deduplicates on `(user_ref, canonical_url)`: a repeated delivery of the same share reuses the original capture untouched, whatever the new timestamp, note, client source, or idempotency key;
+3. stores the capture with provenance fixed at `explicit_user_capture` and the acquisition method implied by the client source; the platform `Idempotency-Key` is kept for correlation only;
+4. when public resolution fails, appends an availability observation and marks the capture `unavailable`, preserving the URL, save time, and note truthfully instead of fabricating content;
+5. publishes `social.source.upserted.v1` (planned);
+6. lets Knowledge analyse the normalized source asynchronously (planned).
+
+Step 4's resolver arrives with plan item 4; the fallback record shape it writes exists and is tested today.
 
 ## Public media normalization
 
@@ -289,4 +291,4 @@ Planned: `ratatoskr-workspace` will pin Instagram with compatible social contrac
 
 ## Project status
 
-The process foundation (configuration, telemetry, operator health, typed errors, owned `instagram_archive` schema) is implemented and gated by CI. Account connections, captures, public resolution, imports, media handling, and the event machinery behind those behaviors do not exist yet; the sections above describe the intended Instagram connector architecture. `DEVELOPMENT.md` records the exact local and CI gate commands.
+The process foundation (configuration, telemetry, operator health, typed errors, owned `instagram_archive` schema) and the explicit capture lane (permalink canonicalization, idempotent capture identity, unavailable fallback, `POST /v1/captures`) are implemented and gated by CI. Account connections, public resolution, imports, media handling, and the event machinery behind those behaviors do not exist yet; those sections above describe the intended Instagram connector architecture. `DEVELOPMENT.md` records the exact local and CI gate commands.

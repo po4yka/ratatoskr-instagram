@@ -24,6 +24,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde::Serialize;
 
+pub mod product;
+
+pub use product::product_router;
+
 /// No database is configured for this process.
 const DATABASE_ABSENT: u8 = 0;
 /// The last probe answered.

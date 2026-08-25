@@ -37,8 +37,9 @@ impl AcquisitionMode {
     ];
 
     /// The capability matrix answer for this mode: the mode's support status
-    /// and its authority ceiling. Every lane is `Planned` until the plan item
-    /// implementing it flips its status with a reviewed test change.
+    /// and its authority ceiling. A lane reports `Planned` until the plan item
+    /// implementing it flips its status with a reviewed test change;
+    /// `ExplicitCapture` is `Supported` since plan item 3.
     #[must_use]
     pub fn capability(self) -> ModeCapability {
         let authority_ceiling = match self {
@@ -47,9 +48,16 @@ impl AcquisitionMode {
             Self::DataExport => SavedAuthority::ExportObservation,
             Self::LegacyImport => SavedAuthority::LegacyObservation,
         };
+        let status = match self {
+            Self::ExplicitCapture => SupportStatus::Supported,
+            Self::PublicResolution
+            | Self::OwnAccountSync
+            | Self::DataExport
+            | Self::LegacyImport => SupportStatus::Planned,
+        };
         ModeCapability {
             mode: self,
-            status: SupportStatus::Planned,
+            status,
             authority_ceiling,
         }
     }
@@ -188,6 +196,22 @@ impl AvailabilityObservationKind {
         AvailabilityObservationKind::Unsupported,
         AvailabilityObservationKind::ResolutionFailed,
     ];
+
+    /// The `snake_case` wire value stored in
+    /// `availability_observations.availability`, equal to the schema CHECK
+    /// vocabulary value for value.
+    #[must_use]
+    pub const fn wire_value(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Unavailable => "unavailable",
+            Self::Deleted => "deleted",
+            Self::Private => "private",
+            Self::TemporarilyUnavailable => "temporarily_unavailable",
+            Self::Unsupported => "unsupported",
+            Self::ResolutionFailed => "resolution_failed",
+        }
+    }
 
     /// Collapse an observation into the media-row upstream status.
     ///

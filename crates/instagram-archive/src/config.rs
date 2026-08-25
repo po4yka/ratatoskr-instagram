@@ -14,6 +14,8 @@ const ENV_PREFIX: &str = "RATATOSKR__";
 pub struct Config {
     /// Operator listener configuration.
     pub admin: AdminConfig,
+    /// Product listener configuration for capture intake.
+    pub api: ApiConfig,
     /// Owned durable storage configuration.
     pub storage: StorageConfig,
     /// Telemetry pipeline configuration.
@@ -26,6 +28,17 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize)]
 pub struct AdminConfig {
     /// Socket address for health, metrics, and version routes.
+    pub listen_address: SocketAddr,
+}
+
+/// Loopback-only product listener configuration.
+///
+/// The capture intake serves the platform's service-to-service channel; user
+/// authentication lives in `ratatoskr-platform`, so this listener defaults to
+/// loopback and refuses every other binding until that boundary moves.
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiConfig {
+    /// Socket address for the capture intake routes.
     pub listen_address: SocketAddr,
 }
 
@@ -176,6 +189,13 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
             Ok(_) => violations.push(refused("must be a loopback address with a port")),
             Err(_) => violations.push(refused("must be a socket address")),
         },
+        "RATATOSKR__API__LISTEN_ADDRESS" => match value.parse::<SocketAddr>() {
+            Ok(address) if address.ip().is_loopback() && address.port() != 0 => {
+                config.api.listen_address = address;
+            }
+            Ok(_) => violations.push(refused("must be a loopback address with a port")),
+            Err(_) => violations.push(refused("must be a socket address")),
+        },
         "RATATOSKR__STORAGE__DATABASE_URL" => {
             match value.parse::<sqlx::postgres::PgConnectOptions>() {
                 Ok(_) => {
@@ -227,6 +247,9 @@ impl Default for Config {
         Self {
             admin: AdminConfig {
                 listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9082),
+            },
+            api: ApiConfig {
+                listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9083),
             },
             storage: StorageConfig { database_url: None },
             telemetry: TelemetryConfig {
