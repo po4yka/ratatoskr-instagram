@@ -11,12 +11,13 @@ use ratatoskr_instagram_archive::Database;
 use ratatoskr_instagram_archive::test_support::{TestDatabase, admin_url};
 
 /// The relations README.md's planned data model declares, no more, no fewer.
-const DECLARED_TABLES: [&str; 13] = [
+const DECLARED_TABLES: [&str; 14] = [
     "accounts",
     "credentials",
     "profiles",
     "media",
     "media_relations",
+    "media_revisions",
     "captures",
     "capture_notes",
     "export_snapshots",

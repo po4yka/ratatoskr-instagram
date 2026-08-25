@@ -2,7 +2,7 @@
 
 `ratatoskr-instagram` is the Instagram account and capture bounded context for Ratatoskr. It combines official account access where available with explicit user-initiated captures, public oEmbed resolution, and versioned Data Export imports.
 
-> **Status:** implementation plan items 1–3 are complete: a Rust service runs locally against PostgreSQL with typed strict configuration, structured telemetry, operator health routes (`/health/live`, `/health/ready`, `/metrics`, `/version`), typed errors, and the first-version `instagram_archive` schema applied at startup. Explicit capture intake is live: permalink canonicalization across delivered URL forms, idempotent capture identity on `(user_ref, canonical_url)`, truthful unavailable-fallback records, and a `POST /v1/captures` product plane on its own loopback listener (`127.0.0.1:9083` by default). Public resolution, account connection, Data Export import, and events described below are planned and are not implemented yet.
+> **Status:** implementation plan items 1–4 are complete: a Rust service runs locally against PostgreSQL with typed strict configuration, structured telemetry, operator health routes (`/health/live`, `/health/ready`, `/metrics`, `/version`), typed errors, and the first-version `instagram_archive` schema applied at startup. Explicit capture intake is live: permalink canonicalization across delivered URL forms, idempotent capture identity on `(user_ref, canonical_url)`, truthful unavailable-fallback records, and a `POST /v1/captures` product plane on its own loopback listener (`127.0.0.1:9083` by default). Public resolution is live at the library level: permalinks resolve through the approved embed/oEmbed-style surface seam, every payload lands as an immutable parser-versioned revision before deterministic normalization into `instagram_archive.media`, and re-resolution appends history instead of overwriting it; the network client behind the seam arrives with provider credentials (plan item 6). Account connection, Data Export import, and events described below are planned and are not implemented yet.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -93,6 +93,7 @@ instagram_credentials
 instagram_profiles
 instagram_media
 instagram_media_relations
+instagram_media_revisions
 instagram_captures
 instagram_capture_notes
 instagram_export_snapshots
@@ -135,7 +136,7 @@ The intake surface is implemented on this service's product listener (`POST /v1/
 5. publishes `social.source.upserted.v1` (planned);
 6. lets Knowledge analyse the normalized source asynchronously (planned).
 
-Step 4's resolver arrives with plan item 4; the fallback record shape it writes exists and is tested today.
+Step 4's resolver exists as of plan item 4: a successful answer stores the raw payload as an immutable parser-versioned revision, normalizes it deterministically into `media`, links the capture, and appends an `available` observation; a failed answer records its kind verbatim. The fallback record shape both paths write is tested today.
 
 ## Public media normalization
 
@@ -291,4 +292,4 @@ Planned: `ratatoskr-workspace` will pin Instagram with compatible social contrac
 
 ## Project status
 
-The process foundation (configuration, telemetry, operator health, typed errors, owned `instagram_archive` schema) and the explicit capture lane (permalink canonicalization, idempotent capture identity, unavailable fallback, `POST /v1/captures`) are implemented and gated by CI. Account connections, public resolution, imports, media handling, and the event machinery behind those behaviors do not exist yet; those sections above describe the intended Instagram connector architecture. `DEVELOPMENT.md` records the exact local and CI gate commands.
+The process foundation (configuration, telemetry, operator health, typed errors, owned `instagram_archive` schema), the explicit capture lane (permalink canonicalization, idempotent capture identity, unavailable fallback, `POST /v1/captures`), and supported public resolution (approved-surface seam, immutable parser-versioned revisions over content-addressed raw payloads, deterministic normalization, verbatim failure kinds) are implemented and gated by CI. The production network client behind the resolution seam, account connections, imports, media handling, and the event machinery behind those behaviors do not exist yet; those sections above describe the intended Instagram connector architecture. `DEVELOPMENT.md` records the exact local and CI gate commands.

@@ -14,13 +14,18 @@ The library SHALL expose a total lookup that, for each documented acquisition mo
 
 #### Scenario: No mode claims support it does not have
 
-- **WHEN** the support statuses of `PublicResolution`, `OwnAccountSync`, `DataExport`, and `LegacyImport` are inspected while their implementing plan items are still open
+- **WHEN** the support statuses of `OwnAccountSync`, `DataExport`, and `LegacyImport` are inspected while their implementing plan items are still open
 - **THEN** none of them reports `Supported`
 
 #### Scenario: The implemented explicit-capture lane reports support
 
 - **WHEN** the capability of `ExplicitCapture` is looked up after its implementing plan item landed
 - **THEN** it reports `Supported` while keeping its documented wire methods (`share_extension`, `browser_extension`) and its `explicit_user_capture` authority ceiling
+
+#### Scenario: The implemented public-resolution lane reports support
+
+- **WHEN** the capability of `PublicResolution` is looked up after its implementing plan item lands
+- **THEN** it reports `Supported` while keeping its documented wire method (`public_resolution`) and its `explicit_user_capture` authority ceiling
 
 ### Requirement: The native Saved list is a stated non-capability
 Because no supported provider surface exposes a personal account's native Saved list, the capability matrix SHALL report native Saved-list synchronization as `NotSupported` together with that reason, and no acquisition mode's authority path SHALL be able to produce a claim that the user's native Saved membership is known from an explicit capture.

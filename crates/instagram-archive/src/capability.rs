@@ -39,7 +39,8 @@ impl AcquisitionMode {
     /// The capability matrix answer for this mode: the mode's support status
     /// and its authority ceiling. A lane reports `Planned` until the plan item
     /// implementing it flips its status with a reviewed test change;
-    /// `ExplicitCapture` is `Supported` since plan item 3.
+    /// `ExplicitCapture` is `Supported` since plan item 3 and
+    /// `PublicResolution` since plan item 4.
     #[must_use]
     pub fn capability(self) -> ModeCapability {
         let authority_ceiling = match self {
@@ -49,11 +50,8 @@ impl AcquisitionMode {
             Self::LegacyImport => SavedAuthority::LegacyObservation,
         };
         let status = match self {
-            Self::ExplicitCapture => SupportStatus::Supported,
-            Self::PublicResolution
-            | Self::OwnAccountSync
-            | Self::DataExport
-            | Self::LegacyImport => SupportStatus::Planned,
+            Self::ExplicitCapture | Self::PublicResolution => SupportStatus::Supported,
+            Self::OwnAccountSync | Self::DataExport | Self::LegacyImport => SupportStatus::Planned,
         };
         ModeCapability {
             mode: self,

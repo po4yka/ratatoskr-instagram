@@ -94,6 +94,7 @@ create table instagram_archive.raw_records (
     blob_ref      text        not null,
     content_hash  bytea       not null,
     byte_size     bigint      not null,
+    body          bytea       not null,
     observed_at   timestamptz not null,
     constraint raw_records_record_kind_check
         check (record_kind in
@@ -102,7 +103,9 @@ create table instagram_archive.raw_records (
 );
 
 comment on table instagram_archive.raw_records is
-    'Content-addressed raw evidence. Bodies live in the BlobStore; rows reference them.';
+    'Content-addressed raw evidence. blob_ref is the lowercase hex SHA-256 of body — the '
+    'BlobStore key once bodies move out of rows. Small payloads ride inline in body until '
+    'that store exists; normalization reads the bytes, never a reconstruction.';
 
 -- ---------------------------------------------------------------------------------------------
 -- profiles
@@ -135,24 +138,25 @@ comment on table instagram_archive.profiles is
 -- reached through supported resolution. Provenance is mandatory on every row.
 
 create table instagram_archive.media (
-    media_id           uuid        primary key,
-    account_id         uuid,
-    provider_media_id  text,
-    permalink          text        not null,
-    media_type         text        not null,
-    caption            text,
-    published_at       timestamptz,
-    acquisition_method text        not null,
-    saved_authority    text        not null,
-    upstream_status    text        not null,
-    created_at         timestamptz not null default now(),
-    updated_at         timestamptz not null default now(),
+    media_id            uuid        primary key,
+    account_id          uuid,
+    provider_media_id   text,
+    permalink           text        not null,
+    media_type          text        not null,
+    caption             text,
+    published_at        timestamptz,
+    acquisition_method  text        not null,
+    saved_authority     text        not null,
+    upstream_status     text        not null,
+    current_revision_id uuid,
+    created_at          timestamptz not null default now(),
+    updated_at          timestamptz not null default now(),
     constraint media_provider_media_id_key unique (provider_media_id),
     constraint media_permalink_key unique (permalink),
     constraint media_account_id_fkey foreign key (account_id)
         references instagram_archive.accounts (account_id),
     constraint media_media_type_check
-        check (media_type in ('image', 'video', 'carousel', 'reel', 'story')),
+        check (media_type in ('image', 'video', 'carousel', 'reel', 'story', 'unknown')),
     constraint media_acquisition_method_check
         check (acquisition_method in
             ('official_api', 'share_extension', 'browser_extension', 'public_resolution',
@@ -166,7 +170,12 @@ create table instagram_archive.media (
 );
 
 comment on table instagram_archive.media is
-    'Resolved media sources with mandatory acquisition and saved-authority provenance.';
+    'Resolved media sources with mandatory acquisition and saved-authority provenance. '
+    'current_revision_id names the newest media_revisions row this projection was read from.';
+
+comment on column instagram_archive.media.media_type is
+    'The type evidence actually proves. A plain post permalink reveals nothing through the '
+    'oEmbed grammar, so it stores unknown rather than a guess.';
 
 comment on constraint media_acquisition_method_check on instagram_archive.media is
     'How this record was obtained. Closed vocabulary; never silently upgraded.';
@@ -193,6 +202,37 @@ create table instagram_archive.media_relations (
 
 comment on table instagram_archive.media_relations is
     'Edges between one source and its parts: carousel children, reel covers, linked posts.';
+
+-- ---------------------------------------------------------------------------------------------
+-- media_revisions
+-- ---------------------------------------------------------------------------------------------
+--
+-- One immutable resolution attempt per row. A revision names the content-addressed raw payload
+-- that answered and the parser version that interprets it; re-resolution appends a new row and
+-- nothing ever updates or deletes an existing one.
+
+create table instagram_archive.media_revisions (
+    revision_id     uuid        primary key,
+    media_id        uuid        not null,
+    raw_record_id   uuid        not null,
+    parser_version  text        not null,
+    resolved_at     timestamptz not null,
+    constraint media_revisions_media_id_fkey foreign key (media_id)
+        references instagram_archive.media (media_id),
+    constraint media_revisions_raw_record_id_fkey foreign key (raw_record_id)
+        references instagram_archive.raw_records (raw_record_id)
+);
+
+comment on table instagram_archive.media_revisions is
+    'Immutable resolution history. media.current_revision_id points at the newest one; every '
+    'older revision stays byte-identical forever, so re-resolution never overwrites history.';
+
+create index media_revisions_media_idx
+    on instagram_archive.media_revisions (media_id);
+
+alter table instagram_archive.media
+    add constraint media_current_revision_id_fkey foreign key (current_revision_id)
+    references instagram_archive.media_revisions (revision_id);
 
 -- ---------------------------------------------------------------------------------------------
 -- captures

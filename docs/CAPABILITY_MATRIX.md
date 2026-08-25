@@ -2,16 +2,16 @@
 
 Status: authoritative for this repository. Records what `ratatoskr-instagram` can acquire from Instagram, what each acquisition mode is allowed to prove about saved state, and how the model aligns with the published social contracts.
 
-The monolith resolved public embeds and took manual captures without a capability model, so gaps were silent: records existed whose provenance nobody could explain, and absence was indistinguishable from deletion. This matrix exists so that cannot recur. The executable form of everything below lives in `crates/instagram-archive/src/capability.rs` and `crates/instagram-archive/tests/capability.rs`; the behavior contract lives in `openspec/specs/capability-model/`.
+The monolith resolved public embeds and took manual captures without a capability model, so gaps were silent: records existed whose provenance nobody could explain, and absence was indistinguishable from deletion. This matrix exists so that cannot recur. The executable form of everything below lives in `crates/instagram-archive/src/capability.rs`, `crates/instagram-archive/src/resolution.rs`, and the matching `tests/`; the behavior contract lives in `openspec/specs/capability-model/` and `openspec/specs/public-resolution/`.
 
 ## The matrix
 
-`ExplicitCapture` is implemented (plan item 3) and reports `Supported`; the remaining lanes report `Planned`, and the matrix stays a commitment device: an implementation item must flip its own row's status with a reviewed test change before any code path can claim it.
+`ExplicitCapture` is implemented (plan item 3) and `PublicResolution` is implemented (plan item 4); both report `Supported`. The remaining lanes report `Planned`, and the matrix stays a commitment device: an implementation item must flip its own row's status with a reviewed test change before any code path can claim it.
 
 | Mode | Status | Wire acquisition methods | Authority ceiling |
 |---|---|---|---|
 | `ExplicitCapture` | Supported | `share_extension`, `browser_extension` | `explicit_user_capture` |
-| `PublicResolution` | Planned | `public_resolution` | `explicit_user_capture` |
+| `PublicResolution` | Supported | `public_resolution` | `explicit_user_capture` |
 | `OwnAccountSync` | Planned | `official_api` | `authoritative_platform_state` |
 | `DataExport` | Planned | `data_export` | `export_observation` |
 | `LegacyImport` | Planned | `legacy_import` | `legacy_observation` |

@@ -3,7 +3,7 @@
 > Status: Active development
 > Last reviewed: 2026-08-25
 
-Implementation plan items 1–3 are implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `instagram_archive` schema applied at startup; plus the explicit capture intake — permalink canonicalization, idempotent capture identity on `(user_ref, canonical_url)`, the unavailable fallback record, and `POST /v1/captures` on a second loopback listener. Public resolution, account OAuth, Data Export import, eventing, and provider adapters are not implemented yet.
+Implementation plan items 1–4 are implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `instagram_archive` schema applied at startup; plus the explicit capture intake — permalink canonicalization, idempotent capture identity on `(user_ref, canonical_url)`, the unavailable fallback record, and `POST /v1/captures` on a second loopback listener; plus supported public resolution — an approved embed/oEmbed-style surface seam (recorded fixtures in tests), immutable parser-versioned revisions over content-addressed raw payloads, deterministic normalization into `media`, and verbatim failure observations. The production network client behind the seam arrives with provider credentials; account OAuth, Data Export import, and eventing are not implemented yet.
 
 ## Intended toolchain
 

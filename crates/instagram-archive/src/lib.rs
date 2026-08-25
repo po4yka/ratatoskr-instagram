@@ -4,9 +4,10 @@
 //! Domain library for the Ratatoskr Instagram bounded context.
 //!
 //! The foundation owns process configuration, telemetry bootstrap, and
-//! application of the first-version `instagram_archive` schema. Account
-//! connection, explicit captures, public resolution, and Data Export imports
-//! arrive with later implementation plan items.
+//! application of the first-version `instagram_archive` schema. Explicit
+//! capture intake and public resolution through the approved surface are
+//! implemented; account connection and Data Export imports arrive with later
+//! implementation plan items.
 
 /// The capability matrix: acquisition modes, support status, authority
 /// ceilings, and the upstream-versus-preservation boundary.
@@ -19,6 +20,10 @@ pub mod config;
 pub mod database;
 /// Canonicalization of client-delivered Instagram URLs into stable permalinks.
 pub mod permalink;
+/// Public resolution: the approved surface seam, immutable parser-versioned
+/// revisions of raw payloads, deterministic normalization, and truthful
+/// failure observations.
+pub mod resolution;
 pub mod telemetry;
 
 pub use capability::{
@@ -28,6 +33,11 @@ pub use capability::{
 };
 pub use config::{AdminConfig, Config, ConfigError, Limits, StorageConfig, TelemetryConfig};
 pub use database::{Database, PersistenceError};
+pub use permalink::{CanonicalPermalink, PermalinkError, PermalinkKind};
+pub use resolution::{
+    NormalizeError, NormalizedMedia, OEMBED_PARSER_VERSION, PublicSurface, ResolutionError,
+    ResolutionOutcome, StoredResolution, SurfaceOutcome, kind_media_type, normalize,
+};
 pub use telemetry::{TelemetryError, TelemetryGuard, init_telemetry};
 
 #[cfg(feature = "test-support")]

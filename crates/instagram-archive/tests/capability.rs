@@ -108,6 +108,9 @@ fn no_mode_reports_supported_while_its_lane_is_unimplemented() {
         if mode == AcquisitionMode::ExplicitCapture {
             continue; // implemented by plan item 3; see the dedicated test below.
         }
+        if mode == AcquisitionMode::PublicResolution {
+            continue; // implemented by plan item 4; see the dedicated test below.
+        }
         let status = mode.capability().status;
         assert_ne!(
             status,
@@ -135,6 +138,26 @@ fn implemented_explicit_capture_lane_reports_support_with_unchanged_terms() {
         capability.authority_ceiling,
         SavedAuthority::ExplicitUserCapture,
         "support never raises the authority ceiling"
+    );
+}
+
+#[test]
+fn implemented_public_resolution_lane_reports_support_with_unchanged_terms() {
+    let capability = AcquisitionMode::PublicResolution.capability();
+    assert_eq!(
+        capability.status,
+        SupportStatus::Supported,
+        "the public-resolution lane is exercisable once its plan item lands"
+    );
+    assert_eq!(
+        capability.wire_methods(),
+        &["public_resolution"],
+        "support changes no documented wire vocabulary"
+    );
+    assert_eq!(
+        capability.authority_ceiling,
+        SavedAuthority::ExplicitUserCapture,
+        "resolving upstream content never raises the authority ceiling"
     );
 }
 
