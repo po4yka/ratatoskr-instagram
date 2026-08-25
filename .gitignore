@@ -17,3 +17,4 @@ target/
 
 # OS
 .DS_Store
+.omo/
