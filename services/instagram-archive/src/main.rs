@@ -16,6 +16,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_nats::jetstream;
+use futures_util::StreamExt as _;
 use secrecy::ExposeSecret as _;
 
 use ratatoskr_instagram_archive::provider::{
@@ -23,7 +25,7 @@ use ratatoskr_instagram_archive::provider::{
 };
 use ratatoskr_instagram_archive::publishing::TransportError;
 use ratatoskr_instagram_archive::telemetry::SERVICE_NAME;
-use ratatoskr_instagram_archive::{Config, Database, PublisherConfig};
+use ratatoskr_instagram_archive::{BusConfig, Config, Database, PublisherConfig};
 use ratatoskr_instagram_archive_service::{OfficialAccountRuntime, RuntimeState};
 use uuid::Uuid;
 
@@ -124,6 +126,8 @@ async fn tokio_main() -> Result<(), ExitCode> {
         ExitCode::from(78)
     })?;
 
+    let command_consumer = start_command_consumer(&config, database.clone()).await?;
+
     let runtime = Arc::new(RuntimeState::new());
     let admin_listener = tokio::net::TcpListener::bind(config.admin.listen_address)
         .await
@@ -205,6 +209,9 @@ async fn tokio_main() -> Result<(), ExitCode> {
             );
         }
     }
+    if let Some(consumer) = command_consumer {
+        consumer.abort();
+    }
     database.close().await;
 
     match (admin_result, api_result) {
@@ -220,6 +227,96 @@ async fn tokio_main() -> Result<(), ExitCode> {
             }
             Err(ExitCode::FAILURE)
         }
+    }
+}
+
+/// Starts the optional broker lane and turns a configured-bus failure into a
+/// startup failure before readiness can be exposed.
+async fn start_command_consumer(
+    config: &Config,
+    database: Database,
+) -> Result<Option<tokio::task::JoinHandle<()>>, ExitCode> {
+    let Some(bus) = config.bus.as_ref() else {
+        return Ok(None);
+    };
+    spawn_browser_capture_consumer(database, bus)
+        .await
+        .map(Some)
+        .map_err(|error| {
+            tracing::error!(%error, "the JetStream command consumer could not start");
+            ExitCode::FAILURE
+        })
+}
+
+/// Connects the provider-specific durable consumer before the service is ready.
+///
+/// A configured broker is mandatory rather than best-effort: accepting a
+/// process as ready while its explicit browser-capture path cannot consume is
+/// an operational lie. The Platform-owned command stream must already exist.
+async fn spawn_browser_capture_consumer(
+    database: Database,
+    bus: &BusConfig,
+) -> Result<tokio::task::JoinHandle<()>, String> {
+    let client = match bus.nkey_seed_path.as_deref() {
+        Some(seed_path) => {
+            let seed = std::fs::read_to_string(seed_path)
+                .map_err(|_| "the NATS nkey seed could not be read".to_owned())?;
+            async_nats::ConnectOptions::with_nkey(seed.trim().to_owned())
+                .connect(&bus.url)
+                .await
+                .map_err(|_| "the NATS broker rejected the configured consumer".to_owned())?
+        }
+        None => async_nats::connect(&bus.url)
+            .await
+            .map_err(|_| "the NATS broker could not be reached".to_owned())?,
+    };
+    let context = jetstream::new(client);
+    let consumer: jetstream::consumer::PullConsumer = context
+        .get_consumer_from_stream("ratatoskr_instagram_browser_capture", "ratatoskr_commands")
+        .await
+        .map_err(|_| {
+            "the preprovisioned Instagram durable command consumer is unavailable".to_owned()
+        })?;
+    validate_browser_capture_consumer(&consumer)?;
+    let messages = consumer
+        .messages()
+        .await
+        .map_err(|_| "the Instagram command consumer cannot receive deliveries".to_owned())?;
+    Ok(tokio::spawn(async move {
+        consume_browser_captures(database, messages).await;
+    }))
+}
+
+/// Refuses a broker durable that would broaden delivery or acknowledgement semantics.
+fn validate_browser_capture_consumer(
+    consumer: &jetstream::consumer::PullConsumer,
+) -> Result<(), String> {
+    let info = consumer.cached_info();
+    let config = &info.config;
+    if info.stream_name != "ratatoskr_commands"
+        || info.name != "ratatoskr_instagram_browser_capture"
+        || config.durable_name.as_deref() != Some("ratatoskr_instagram_browser_capture")
+        || config.filter_subject != "cmd.instagram.capture.requested.v1"
+        || config.deliver_subject.is_some()
+        || config.ack_policy != jetstream::consumer::AckPolicy::Explicit
+    {
+        return Err("the preprovisioned Instagram consumer configuration is unsafe".to_owned());
+    }
+    Ok(())
+}
+
+/// Applies one broker delivery only after the archive inbox has recorded it.
+async fn consume_browser_captures(
+    database: Database,
+    mut messages: jetstream::consumer::pull::Stream,
+) {
+    while let Some(delivery) = messages.next().await {
+        let Ok(message) = delivery else {
+            tracing::warn!("the Instagram JetStream delivery could not be read");
+            continue;
+        };
+        ratatoskr_instagram_archive_service::command_consumer::consume_one(&database, &message)
+            .await;
     }
 }
 

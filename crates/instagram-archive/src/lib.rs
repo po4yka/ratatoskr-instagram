@@ -21,6 +21,8 @@ pub mod capability_reconciliation;
 /// Explicit capture intake: submission identity, provenance, and the
 /// unavailable fallback.
 pub mod capture;
+/// Provider-specific browser-command validation and capture handoff.
+pub mod command_capture;
 pub mod config;
 /// Authenticated encryption for provider credential material.
 pub mod credentials;
@@ -53,9 +55,13 @@ pub use capability::{
     NativeSavedSupport, PreservationState, SavedAuthority, SupportStatus, UpstreamStatus,
     retention_after_observation,
 };
+pub use command_capture::{
+    BrowserCaptureCommand, BrowserCaptureIngested, CommandCaptureError,
+    decode_browser_capture_command,
+};
 pub use config::{
-    AdminConfig, Config, ConfigError, Limits, OAuthConfig, PublisherConfig, StorageConfig,
-    TelemetryConfig,
+    AdminConfig, BusConfig, Config, ConfigError, Limits, OAuthConfig, PublisherConfig,
+    StorageConfig, TelemetryConfig,
 };
 pub use database::{Database, PersistenceError};
 pub use permalink::{CanonicalPermalink, PermalinkError, PermalinkKind};

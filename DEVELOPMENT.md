@@ -39,17 +39,19 @@ cargo test --workspace --locked --doc
 cargo build --workspace --locked --release
 ```
 
-`.github/workflows/ci.yml` runs this list against PostgreSQL 17 (service container in CI,
-`compose.yaml` on a laptop: user/password/database `instagram`, published on `127.0.0.1:5436`). The
-suite creates disposable databases from the embedded schema per test; without the server the suite
-fails rather than skips. CI additionally runs the 850-line file ratchet and a guard asserting this
-command list is byte-identical to `.github/workflows/ci.yml`.
+`.github/workflows/ci.yml` runs this list against PostgreSQL 17 and an isolated NATS 2 JetStream
+fixture. `compose.yaml` exposes PostgreSQL on `127.0.0.1:5436` (user/password/database `instagram`)
+and NATS on `127.0.0.1:14225`. Set `INSTAGRAM_ARCHIVE_TEST_DATABASE_URL` to the PostgreSQL URL and
+`INSTAGRAM_ARCHIVE_TEST_NATS_URL=nats://127.0.0.1:14225` before the gate. The suite creates
+disposable databases and its own JetStream stream/consumer; missing fixtures fail rather than skip.
+CI additionally runs the 850-line file ratchet and a guard asserting this command list is
+byte-identical to `.github/workflows/ci.yml`.
 
 ## Local run
 
 ```bash
 docker compose up -d
-cargo run -p ratatoskr-instagram-archive-service
+RATATOSKR__BUS__URL=nats://127.0.0.1:14225 cargo run -p ratatoskr-instagram-archive-service
 # operator plane on 127.0.0.1:9082: /health/live /health/ready /metrics /version
 # product plane on 127.0.0.1:9083: POST /v1/captures
 ```
@@ -78,6 +80,14 @@ settings are `CADENCE_SECONDS`, `ACCOUNTS_PER_TICK`, `PAGES_PER_RUN`, and `CALL_
 same `RATATOSKR__OWN_MEDIA__` prefix. The loop consumes the immediate Tokio interval tick and starts
 only after one cadence. Tests call `run_due_once` directly and never sleep. Keep this flag off until
 the OAuth product has the reviewed permission and deployment authorization.
+
+Set mandatory `RATATOSKR__BUS__URL` to a credential-free `nats://` or `tls://` endpoint for the
+durable Instagram browser-capture consumer. In production also set
+`RATATOSKR__BUS__NKEY_SEED_PATH` to the absolute path of the service nkey seed. The NATS role must
+subscribe to `cmd.instagram.capture.requested.v1` and acknowledge the preprovisioned durable
+consumer `ratatoskr_instagram_browser_capture`; Platform owns creation of the `ratatoskr_commands`
+stream and that consumer. The Instagram identity must not receive broad `$JS.API.>` permission.
+Inability to authenticate, connect, or obtain the fixed consumer aborts startup.
 
 ## Workflow
 

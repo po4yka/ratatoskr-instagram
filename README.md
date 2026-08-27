@@ -111,6 +111,21 @@ inbox_events
 
 Large export archives, media files, screenshots, raw API/oEmbed payloads, and unknown provider records are stored in the content-addressed BlobStore.
 
+## Browser command consumer
+
+The service requires `RATATOSKR__BUS__URL` and runs durable consumer
+`ratatoskr_instagram_browser_capture` on only
+`cmd.instagram.capture.requested.v1`. It validates the canonical command envelope and closed
+Instagram provenance before writing the owned inbox and capture record. A configured broker that
+cannot authenticate, connect, or expose the preprovisioned
+`ratatoskr_instagram_browser_capture` durable on `ratatoskr_commands` prevents startup. Platform
+provisions that fixed consumer; the deployment identity needs subscribe permission for that command
+subject and must not hold broad `$JS.API.>` permission.
+
+This lane preserves the capture but publishes no terminal operation outcome yet: no production
+resolver-to-operation-report handoff exists, so unavailable and partial outcomes are never
+fabricated.
+
 ## Capture API flow
 
 Clients submit captures through `ratatoskr-platform`:

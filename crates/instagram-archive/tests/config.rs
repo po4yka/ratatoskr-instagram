@@ -5,26 +5,27 @@ use secrecy::ExposeSecret as _;
 use ratatoskr_instagram_archive::{Config, StorageConfig};
 
 #[test]
-fn empty_environment_yields_loopback_default_and_no_database_url() {
-    let config = Config::from_environment(Vec::<(String, String)>::new())
-        .expect("an empty environment must be valid");
+fn missing_bus_configuration_is_refused() {
+    let error = Config::from_environment(Vec::<(String, String)>::new())
+        .expect_err("a service that owns a command consumer needs a broker endpoint");
 
-    assert_eq!(config.admin.listen_address.to_string(), "127.0.0.1:9082");
-    assert_eq!(config.api.listen_address.to_string(), "127.0.0.1:9083");
-    assert!(config.storage.database_url.is_none());
-    assert_eq!(config.limits.database_connections, 8);
-    assert_eq!(config.limits.database_acquire_timeout_ms, 5_000);
-    assert_eq!(config.limits.shutdown_timeout_ms, 10_000);
+    assert!(error.to_string().contains("RATATOSKR__BUS__URL"));
 }
 
 #[test]
 fn api_listen_address_override_is_honored_and_non_loopback_refused() {
-    let config = Config::from_environment([("RATATOSKR__API__LISTEN_ADDRESS", "127.0.0.1:9183")])
-        .expect("a loopback override must load");
+    let config = Config::from_environment([
+        ("RATATOSKR__API__LISTEN_ADDRESS", "127.0.0.1:9183"),
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+    ])
+    .expect("a loopback override must load");
     assert_eq!(config.api.listen_address.to_string(), "127.0.0.1:9183");
 
-    let error = Config::from_environment([("RATATOSKR__API__LISTEN_ADDRESS", "10.0.0.9:9183")])
-        .expect_err("the product listener is loopback-only like the operator one");
+    let error = Config::from_environment([
+        ("RATATOSKR__API__LISTEN_ADDRESS", "10.0.0.9:9183"),
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+    ])
+    .expect_err("the product listener is loopback-only like the operator one");
     let rendered = error.to_string();
     assert!(
         rendered.contains("RATATOSKR__API__LISTEN_ADDRESS"),
@@ -36,8 +37,11 @@ fn api_listen_address_override_is_honored_and_non_loopback_refused() {
 
 #[test]
 fn unknown_prefixed_key_is_refused_naming_the_key() {
-    let error = Config::from_environment([("RATATOSKR__NOT_A_SECTION__VALUE", "1")])
-        .expect_err("an unknown key must be refused");
+    let error = Config::from_environment([
+        ("RATATOSKR__NOT_A_SECTION__VALUE", "1"),
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+    ])
+    .expect_err("an unknown key must be refused");
 
     let rendered = error.to_string();
     assert!(
@@ -55,6 +59,7 @@ fn multiple_violations_are_reported_together_without_values() {
     let error = Config::from_environment([
         ("RATATOSKR__ADMIN__LISTEN_ADDRESS", "10.0.0.1:9082"),
         ("RATATOSKR__LIMITS__DATABASE_CONNECTIONS", "0"),
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
     ])
     .expect_err("two independent violations must both be refused");
 
@@ -77,9 +82,11 @@ fn multiple_violations_are_reported_together_without_values() {
 
 #[test]
 fn malformed_database_url_is_refused() {
-    let error =
-        Config::from_environment([("RATATOSKR__STORAGE__DATABASE_URL", "not a url at all")])
-            .expect_err("a malformed database URL must be refused");
+    let error = Config::from_environment([
+        ("RATATOSKR__STORAGE__DATABASE_URL", "not a url at all"),
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+    ])
+    .expect_err("a malformed database URL must be refused");
 
     assert!(error.to_string().contains("PostgreSQL"));
 }
@@ -92,6 +99,7 @@ fn recognized_override_changes_exactly_its_own_field() {
             "RATATOSKR__STORAGE__DATABASE_URL",
             "postgres://instagram:instagram@127.0.0.1:5436/instagram",
         ),
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
     ])
     .expect("valid overrides must load");
 
@@ -129,6 +137,7 @@ fn debug_rendering_of_storage_redacts_the_database_url() {
 
 fn complete_oauth_environment() -> Vec<(&'static str, &'static str)> {
     vec![
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
         ("RATATOSKR__OAUTH__ENABLED", "true"),
         ("RATATOSKR__OAUTH__CLIENT_ID", "123456789"),
         ("RATATOSKR__OAUTH__CLIENT_SECRET", "synthetic-client-secret"),
@@ -155,8 +164,11 @@ fn complete_oauth_environment() -> Vec<(&'static str, &'static str)> {
 
 #[test]
 fn oauth_disabled_accepts_missing_secrets() {
-    let config = Config::from_environment([("RATATOSKR__OAUTH__ENABLED", "false")])
-        .expect("disabled OAuth needs no provider credentials");
+    let config = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        ("RATATOSKR__OAUTH__ENABLED", "false"),
+    ])
+    .expect("disabled OAuth needs no provider credentials");
     assert!(!config.oauth.enabled);
     assert!(config.oauth.client_secret.is_none());
     assert!(config.oauth.keyring.is_none());
@@ -220,8 +232,8 @@ fn production_provider_hosts_cannot_be_overridden() {
 
 #[test]
 fn own_media_scheduler_is_disabled_by_default_and_rejects_unbounded_limits() {
-    let defaults =
-        Config::from_environment(Vec::<(&str, &str)>::new()).expect("default configuration loads");
+    let defaults = Config::from_environment([("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222")])
+        .expect("configuration with the mandatory bus loads");
     assert!(!defaults.own_media.enabled);
 
     let mut entries = complete_oauth_environment();

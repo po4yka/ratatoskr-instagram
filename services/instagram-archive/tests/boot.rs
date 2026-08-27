@@ -7,6 +7,7 @@ use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use async_nats::jetstream;
 use ratatoskr_instagram_archive::test_support::TestDatabase;
 
 const BIN: &str = env!("CARGO_BIN_EXE_ratatoskr-instagram-archive");
@@ -42,6 +43,7 @@ fn http_get(port: u16, path: &str) -> Option<(u16, String)> {
 fn spawn_service(database_url: &str, admin_port: u16) -> Child {
     Command::new(BIN)
         .env("RATATOSKR__STORAGE__DATABASE_URL", database_url)
+        .env("RATATOSKR__BUS__URL", test_nats_url())
         .env(
             "RATATOSKR__ADMIN__LISTEN_ADDRESS",
             format!("127.0.0.1:{admin_port}"),
@@ -59,6 +61,7 @@ fn spawn_service(database_url: &str, admin_port: u16) -> Child {
 #[cfg(unix)]
 #[tokio::test]
 async fn boots_serves_and_stops_cleanly_on_sigterm() {
+    preprovision_browser_capture_consumer().await;
     let test = TestDatabase::create().await.expect("a prepared database");
     let url = test_url(test.name());
     let port = free_port();
@@ -119,6 +122,7 @@ async fn check_config_accepts_valid_configuration_without_binding() {
     let output = Command::new(BIN)
         .arg("check-config")
         .env("RATATOSKR__STORAGE__DATABASE_URL", test_url(test.name()))
+        .env("RATATOSKR__BUS__URL", test_nats_url())
         .output()
         .expect("check-config runs");
 
@@ -135,6 +139,7 @@ async fn check_config_refuses_invalid_configuration_without_echoing_values() {
         .arg("check-config")
         .env("RATATOSKR__ADMIN__LISTEN_ADDRESS", "10.9.8.7:9082")
         .env("RATATOSKR__LIMITS__SHUTDOWN_TIMEOUT_MS", "0")
+        .env("RATATOSKR__BUS__URL", test_nats_url())
         .output()
         .expect("check-config runs");
 
@@ -153,6 +158,7 @@ async fn check_config_refuses_invalid_configuration_without_echoing_values() {
 async fn missing_database_url_refuses_startup() {
     let port = free_port();
     let mut child = Command::new(BIN)
+        .env("RATATOSKR__BUS__URL", test_nats_url())
         .env(
             "RATATOSKR__ADMIN__LISTEN_ADDRESS",
             format!("127.0.0.1:{port}"),
@@ -198,4 +204,42 @@ fn test_url(name: &str) -> String {
     let base = ratatoskr_instagram_archive::test_support::admin_url();
     let (prefix, _) = base.rsplit_once('/').unwrap_or((base.as_str(), ""));
     format!("{prefix}/{name}")
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    clippy::expect_used,
+    reason = "the integration binary must use the explicitly isolated test broker"
+)]
+fn test_nats_url() -> String {
+    std::env::var("INSTAGRAM_ARCHIVE_TEST_NATS_URL")
+        .expect("an isolated JetStream endpoint is required")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "the isolated broker fixture is part of the boot contract"
+)]
+async fn preprovision_browser_capture_consumer() {
+    let client = async_nats::connect(test_nats_url())
+        .await
+        .expect("the isolated broker connects");
+    let context = jetstream::new(client);
+    let stream = context
+        .create_stream(jetstream::stream::Config {
+            name: "ratatoskr_commands".to_owned(),
+            subjects: vec!["cmd.>".to_owned()],
+            ..jetstream::stream::Config::default()
+        })
+        .await
+        .expect("the privileged fixture creates the command stream");
+    let _: jetstream::consumer::PullConsumer = stream
+        .create_consumer(jetstream::consumer::pull::Config {
+            durable_name: Some("ratatoskr_instagram_browser_capture".to_owned()),
+            filter_subject: "cmd.instagram.capture.requested.v1".to_owned(),
+            ack_policy: jetstream::consumer::AckPolicy::Explicit,
+            ..jetstream::consumer::pull::Config::default()
+        })
+        .await
+        .expect("the privileged fixture preprovisions the fixed durable");
 }

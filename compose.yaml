@@ -1,4 +1,11 @@
 services:
+  nats:
+    image: nats:2-alpine@sha256:d4ac35882ac65aff236cd65b9d3fa4d24332c681e1a85f94eedccd3cdd65b1da
+    container_name: ratatoskr-instagram-nats
+    command: ["-js"]
+    ports:
+      - "127.0.0.1:14225:4222"
+
   postgres:
     image: postgres:17
     container_name: ratatoskr-instagram-postgres

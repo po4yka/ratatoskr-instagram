@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 
 use base64::Engine as _;
 use secrecy::{ExposeSecret as _, SecretString};
@@ -33,6 +34,17 @@ pub struct Config {
     pub oauth: OAuthConfig,
     /// Disabled-by-default connected-account own-media scheduler.
     pub own_media: OwnMediaSyncConfig,
+    /// `JetStream` command-consumer configuration.
+    pub bus: Option<BusConfig>,
+}
+
+/// The broker identity used only by the command consumer.
+#[derive(Debug, Clone, Serialize)]
+pub struct BusConfig {
+    /// A credential-free `nats://` or `tls://` endpoint.
+    pub url: String,
+    /// Optional absolute file containing the role's NATS nkey seed.
+    pub nkey_seed_path: Option<PathBuf>,
 }
 
 /// Official Instagram Login configuration.
@@ -254,6 +266,13 @@ impl Config {
         }
         validate_oauth(&config.oauth, &mut violations);
         validate_own_media(&config, &mut violations);
+
+        if config.bus.as_ref().is_none_or(|bus| bus.url.is_empty()) {
+            violations.push(Violation {
+                key: "RATATOSKR__BUS__URL".to_owned(),
+                rule: "must configure the mandatory JetStream command-consumer endpoint",
+            });
+        }
 
         if violations.is_empty() {
             Ok(config)
@@ -658,6 +677,23 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
             Ok(parsed) => config.own_media.call_budget = parsed,
             Err(rule) => violations.push(refused(rule)),
         },
+        "RATATOSKR__BUS__URL" => {
+            if matches!(value.split("://").next(), Some("nats" | "tls")) && !value.contains('@') {
+                let bus = config.bus.get_or_insert_with(default_bus);
+                value.clone_into(&mut bus.url);
+            } else {
+                violations.push(refused("must be a credential-free nats:// or tls:// URL"));
+            }
+        }
+        "RATATOSKR__BUS__NKEY_SEED_PATH" => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                let bus = config.bus.get_or_insert_with(default_bus);
+                bus.nkey_seed_path = Some(path);
+            } else {
+                violations.push(refused("must be an absolute readable seed-file path"));
+            }
+        }
         _ => violations.push(refused("is not recognized")),
     }
 }
@@ -722,6 +758,14 @@ impl Default for Config {
                 pages_per_run: 8,
                 call_budget: 8,
             },
+            bus: None,
         }
+    }
+}
+
+fn default_bus() -> BusConfig {
+    BusConfig {
+        url: String::new(),
+        nkey_seed_path: None,
     }
 }
