@@ -114,6 +114,9 @@ fn no_mode_reports_supported_while_its_lane_is_unimplemented() {
         if mode == AcquisitionMode::OwnAccountSync {
             continue; // implemented by plan item 7; see account_capabilities.rs.
         }
+        if mode == AcquisitionMode::DataExport {
+            continue; // implemented by plan item 8; see capability.rs and data_export.rs.
+        }
         let status = mode.capability().status;
         assert_ne!(
             status,

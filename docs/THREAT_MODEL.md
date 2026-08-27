@@ -11,7 +11,17 @@ OAuth credentials, professional account data, captures/notes, private/unavailabl
   key version, account/flow identity, and token kind. Secrets are redacted from config and errors.
 - **Privacy bypass/hidden scraping:** prohibit passwords/cookies/hidden endpoints; use supported APIs/public resolution and explicit uploads only.
 - **Malicious URL/redirect:** strict Instagram URL classification, safe HTTP behavior, no local-network fetch.
-- **Archive/zip bomb/path traversal:** immutable raw blob, file/count/size/decompression/path limits, isolated parsing.
+- **Archive/zip bomb/path traversal:** authenticate before polling the body; stream/hash under an
+  exact body cap into private create-new staging; publish a verified no-overwrite BlobRef; preflight
+  central/local headers; reject traversal, absolute/backslash/ambiguous/duplicate names, symlinks,
+  encryption and unsupported codecs; enforce entry/count/compressed/decompressed/ratio limits and
+  actual emitted-byte counters. Parser reads are bounded and never materialize archive paths.
+- **Cross-owner export disclosure:** credentials resolve to one owner, receipt uniqueness is
+  owner/digest scoped, and status/report lookup filters by both run and owner with no-store 404s.
+- **False completeness/deletion:** reports expose exact overlap/difference sets and a fixed
+  disclaimer; absence creates no tombstone, unavailable state, removal fact, or native-Saved claim.
+- **Export media execution/expansion:** the raw ZIP is retained, but referenced media is never
+  decoded, fetched, executed, or represented as a separately archived media BlobRef.
 - **Sensitive media leak:** owner authorization, protected BlobStore, safe events/logs, retention/deletion propagation.
 - **False authority:** typed acquisition/saved-authority fields and UI wording.
 - **Malicious captions/metadata:** untrusted data, output escaping, no instruction execution.

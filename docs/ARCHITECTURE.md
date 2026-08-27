@@ -86,9 +86,11 @@ instagram_archive.media_revisions
 instagram_archive.captures
 instagram_archive.capture_attempts
 instagram_archive.public_resolutions
-instagram_archive.data_exports
+instagram_archive.export_snapshots
 instagram_archive.import_runs
-instagram_archive.import_records
+instagram_archive.import_run_transitions
+instagram_archive.export_records
+instagram_archive.export_completeness_reports
 instagram_archive.unavailable_sources
 instagram_archive.outbox
 instagram_archive.inbox
@@ -338,7 +340,7 @@ receive archive
 -> immutable raw BlobStore object
 -> safe archive inspection
 -> provider/schema detection
--> isolated extraction
+-> bounded metadata inspection and entry reads (no path materialization)
 -> versioned parser
 -> staging validation
 -> reconcile provider records
@@ -360,6 +362,10 @@ receive archive
 
 Parsers are selected by detected export structure and version. Unknown record variants are retained and reported; they are not silently ignored.
 
+The first registry entry is `instagram-saved-posts-json-v1` and recognizes exactly
+`your_instagram_activity/saved/saved_posts.json`. Changing that grammar adds another parser id; it
+does not reinterpret an existing run. Current compatibility evidence is synthetic/redacted only.
+
 ### 11.4. Completeness
 
 An import report distinguishes:
@@ -375,6 +381,13 @@ warnings
 ```
 
 Absence of a category in one export is not proof that provider data was deleted.
+
+Runs advance with compare-and-swap transitions `received -> inspected -> parsed -> reconciled`;
+`failed` is terminal. Reconciliation commits normalized revisions, owner-scoped SocialSource facts,
+the sorted set report, and the terminal transition atomically. The report compares distinct stable
+export identities to owner captures as `matched`, `export_only`, `capture_only`, and
+`non_comparable`; counts are the exact list cardinalities. No gap mutates a capture, tombstone, or
+availability observation.
 
 ## 12. Normalized social source
 
@@ -515,9 +528,12 @@ instagram_capture_requests_total
 instagram_capture_unavailable_total
 instagram_account_sync_duration_seconds
 instagram_reauth_required_total
-instagram_export_import_duration_seconds
-instagram_export_unknown_records_total
-instagram_export_missing_assets_total
+instagram_data_export_stage_total
+instagram_data_export_stage_duration_seconds
+instagram_data_export_failure_total
+instagram_data_export_category_records_total
+instagram_data_export_warnings_total
+instagram_data_export_completeness_gap_count
 instagram_media_bytes_stored
 queue_lag_seconds
 ```

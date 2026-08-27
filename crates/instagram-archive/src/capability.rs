@@ -50,10 +50,11 @@ impl AcquisitionMode {
             Self::LegacyImport => SavedAuthority::LegacyObservation,
         };
         let status = match self {
-            Self::ExplicitCapture | Self::PublicResolution | Self::OwnAccountSync => {
-                SupportStatus::Supported
-            }
-            Self::DataExport | Self::LegacyImport => SupportStatus::Planned,
+            Self::ExplicitCapture
+            | Self::PublicResolution
+            | Self::OwnAccountSync
+            | Self::DataExport => SupportStatus::Supported,
+            Self::LegacyImport => SupportStatus::Planned,
         };
         ModeCapability {
             mode: self,
@@ -274,4 +275,25 @@ pub fn retention_after_observation(
 ) -> PreservationState {
     let _ = observed;
     current
+}
+
+#[cfg(test)]
+mod data_export_tests {
+    use super::*;
+
+    #[test]
+    fn data_export_is_supported_after_item_eight() {
+        let capability = AcquisitionMode::DataExport.capability();
+        assert_eq!(capability.status, SupportStatus::Supported);
+        assert_eq!(
+            capability.authority_ceiling,
+            SavedAuthority::ExportObservation
+        );
+        assert_eq!(capability.wire_methods(), ["data_export"]);
+        assert_eq!(
+            AcquisitionMode::LegacyImport.capability().status,
+            SupportStatus::Planned
+        );
+        assert_eq!(NATIVE_SAVED_LIST_SYNC.status, SupportStatus::NotSupported);
+    }
 }

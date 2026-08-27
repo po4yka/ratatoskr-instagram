@@ -3,11 +3,11 @@
 > Status: Active development
 > Last reviewed: 2026-08-27
 
-Implementation plan items 1–7 are implemented. The official account lane and its own-media scheduler are disabled by default. Supported professional accounts use Graph `v26.0`, `instagram_business_basic`, encrypted credentials, current capability generations, durable call budgets, resumable page cursors, completion-only watermarks, and atomic own-media authority. Data Export import remains unimplemented.
+Implementation plan items 1–8 are implemented. The official account lane, own-media scheduler, and authenticated Data Export lane are disabled by default. Data Export stores the exact ZIP before processing, uses parser `instagram-saved-posts-json-v1`, and reports capture/export gaps without deletion inference. Only synthetic/redacted export compatibility has been verified.
 
 ## Intended toolchain
 
-Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, tracing, Prometheus, Reqwest/Rustls, and AES-256-GCM. Planned for later items: safe archive import, BlobStore, NATS, WireMock, and testcontainers.
+Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, tracing, Prometheus, Reqwest/Rustls, AES-256-GCM, and ZIP/Deflate inspection. NATS and PostgreSQL fixtures are required by the full gate.
 
 ## Code size limits
 
@@ -53,7 +53,7 @@ byte-identical to `.github/workflows/ci.yml`.
 docker compose up -d
 RATATOSKR__BUS__URL=nats://127.0.0.1:14225 cargo run -p ratatoskr-instagram-archive-service
 # operator plane on 127.0.0.1:9082: /health/live /health/ready /metrics /version
-# product plane on 127.0.0.1:9083: POST /v1/captures
+# product plane on 127.0.0.1:9083: POST /v1/captures, POST/GET /v1/data-exports
 ```
 
 `RATATOSKR__STORAGE__DATABASE_URL=postgres://instagram:instagram@127.0.0.1:5436/instagram` is
@@ -80,6 +80,19 @@ settings are `CADENCE_SECONDS`, `ACCOUNTS_PER_TICK`, `PAGES_PER_RUN`, and `CALL_
 same `RATATOSKR__OWN_MEDIA__` prefix. The loop consumes the immediate Tokio interval tick and starts
 only after one cadence. Tests call `run_due_once` directly and never sleep. Keep this flag off until
 the OAuth product has the reviewed permission and deployment authorization.
+
+Data Export additionally requires `RATATOSKR__DATA_EXPORT__ENABLED=true`, absolute disjoint
+`BLOB_ROOT` and `STAGING_ROOT`, and `BEARER_TOKENS=owner-uuid:opaque-token[,..]`. Every archive,
+entry, path, ratio, poll, and batch limit is configured under the same prefix; defaults and exact
+HTTP/parser behavior are documented in `README.md`. Roots must be private and service-owned. Do not
+enable the lane until retention/access policy and owner-bound credentials are provisioned.
+
+The deterministic hostile/property suite is part of `cargo test`. With local nightly and
+`cargo-fuzz`, run the additional bounded smoke as:
+
+```bash
+build-gate -- cargo +nightly fuzz run data_export_archive -- -max_total_time=60
+```
 
 Set mandatory `RATATOSKR__BUS__URL` to a credential-free `nats://` or `tls://` endpoint for the
 durable Instagram browser-capture consumer. In production also set

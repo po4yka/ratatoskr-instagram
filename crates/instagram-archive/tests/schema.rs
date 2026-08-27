@@ -11,7 +11,7 @@ use ratatoskr_instagram_archive::Database;
 use ratatoskr_instagram_archive::test_support::{TestDatabase, admin_url};
 
 /// The relations README.md's planned data model declares, no more, no fewer.
-const DECLARED_TABLES: [&str; 25] = [
+const DECLARED_TABLES: [&str; 28] = [
     "accounts",
     "account_capabilities",
     "account_credential_audit",
@@ -33,11 +33,69 @@ const DECLARED_TABLES: [&str; 25] = [
     "capture_notes",
     "export_snapshots",
     "import_runs",
+    "import_run_transitions",
+    "export_records",
+    "export_completeness_reports",
     "raw_records",
     "availability_observations",
     "outbox_events",
     "inbox_events",
 ];
+
+#[tokio::test]
+async fn fresh_schema_has_owner_scoped_data_export_state_machine() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+
+    let tables = archive_tables(pool).await;
+    for required in [
+        "export_snapshots",
+        "import_runs",
+        "import_run_transitions",
+        "export_records",
+        "export_completeness_reports",
+    ] {
+        assert!(
+            tables.iter().any(|table| table == required),
+            "Data Export relation {required} must exist"
+        );
+    }
+
+    let owner_digest_unique: Option<String> = sqlx::query_scalar(
+        "select constraint_name from information_schema.table_constraints
+         where table_schema = 'instagram_archive'
+           and table_name = 'export_snapshots'
+           and constraint_name = 'export_snapshots_user_archive_hash_key'
+           and constraint_type = 'UNIQUE'",
+    )
+    .fetch_optional(pool)
+    .await
+    .expect("the constraint catalog query answers");
+    assert_eq!(
+        owner_digest_unique.as_deref(),
+        Some("export_snapshots_user_archive_hash_key"),
+        "archive receipt replay must be scoped by owner and digest"
+    );
+
+    let state_check: Option<String> = sqlx::query_scalar(
+        "select pg_get_constraintdef(oid)
+         from pg_constraint
+         where conrelid = 'instagram_archive.import_runs'::regclass
+           and conname = 'import_runs_state_check'",
+    )
+    .fetch_optional(pool)
+    .await
+    .expect("the state constraint catalog query answers");
+    let state_check = state_check.expect("the import state check must exist");
+    for state in ["received", "inspected", "parsed", "reconciled", "failed"] {
+        assert!(
+            state_check.contains(state),
+            "closed import state constraint must include {state}: {state_check}"
+        );
+    }
+
+    test.cleanup().await.expect("cleanup must drop");
+}
 
 #[tokio::test]
 async fn official_oauth_tables_match_the_current_schema() {

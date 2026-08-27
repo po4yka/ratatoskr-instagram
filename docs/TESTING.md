@@ -10,13 +10,19 @@ Required tests:
 - Explicit Share/Browser capture idempotency and provenance.
 - Public post/reel resolution, deleted/private/unsupported/expired responses, unknown fields.
 - Media size/type/authorization/retention behavior.
-- Safe Data Export import: schema detection, parser versions, zip bomb/path traversal, unknown records, duplicate archives, partial assets.
+- Safe Data Export import: ZIP slip/absolute/backslash/duplicate/symlink/encrypted/unsupported/truncated
+  inputs, exact count/size/ratio limits, 256-case property runs, deterministic parser output,
+  unknown evidence, replay-safe reconciliation, exact completeness math, owner isolation, and
+  terminal restart behavior. A local 60-second libFuzzer harness is available under `fuzz/`.
 - Missing-data versus deletion semantics.
 - SQL schema initialization, outbox/inbox redelivery, privacy deletion, no-secret/content logging.
 - Planned workspace mobile/extension capture -> Instagram -> Knowledge flow.
 
 Fixtures are synthetic or user-authorized and scrubbed; no personal account is required in CI.
 Normal tests download no provider media and contact no live Instagram account.
+The admitted Data Export fixture is synthetic/redacted and proves parser behavior, not current
+compatibility with a real Instagram owner export. Adding such evidence requires a separately
+authorized, scrubbed fixture review; personal exports and media never enter the repository.
 
 ## Test-first
 

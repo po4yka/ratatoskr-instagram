@@ -1,0 +1,22 @@
+{
+  "saved_saved_media": [
+    {
+      "title": "synthetic_creator_alpha",
+      "string_map_data": {
+        "Saved on": {
+          "href": "https://www.instagram.com/p/SYNTHETIC01/",
+          "timestamp": 1700000000
+        }
+      }
+    },
+    {
+      "title": "synthetic_creator_beta",
+      "string_map_data": {
+        "Saved on": {
+          "href": "https://www.instagram.com/reel/SYNTHETIC02/",
+          "timestamp": 1700000100
+        }
+      }
+    }
+  ]
+}

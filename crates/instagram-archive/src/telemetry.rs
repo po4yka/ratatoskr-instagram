@@ -4,12 +4,243 @@
 //! refusal, not a reset: two subscribers or two recorders would split every
 //! observation after startup.
 
-use metrics::{counter, gauge};
+use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::config::TelemetryConfig;
+
+/// Closed Data Export pipeline stage label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataExportStage {
+    /// Authenticated streaming receipt.
+    Receipt,
+    /// Hostile archive inspection.
+    Inspect,
+    /// Versioned format parsing.
+    Parse,
+    /// Projection/report reconciliation.
+    Reconcile,
+}
+
+/// Closed Data Export stage outcome label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataExportOutcome {
+    /// A new receipt was accepted.
+    Accepted,
+    /// An exact owner receipt was replayed.
+    Replayed,
+    /// A processing stage completed.
+    Succeeded,
+    /// Input or durable evidence was refused.
+    Refused,
+}
+
+/// Closed completeness gap label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataExportGap {
+    /// Comparable identity found in both sources.
+    Matched,
+    /// Identity found only in the export.
+    ExportOnly,
+    /// Comparable capture found only outside the export.
+    CaptureOnly,
+    /// Capture without a comparable stable identity.
+    NonComparable,
+}
+
+/// Closed parsed category label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataExportCategory {
+    /// Supported saved-post records.
+    SavedPosts,
+    /// Retained unknown archive material.
+    Unknown,
+}
+
+/// Closed parser warning label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataExportWarning {
+    /// One saved record had an unknown shape.
+    UnknownSavedRecord,
+    /// The supported section contained an unknown top-level field.
+    UnknownSavedSectionField,
+    /// An archive entry belongs to an unknown section.
+    UnknownArchiveSection,
+    /// Referenced media bytes remain only inside the raw archive.
+    MediaBytesReferenceOnly,
+}
+
+/// Closed safe failure class label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataExportFailure {
+    /// Authentication was refused before reading a body.
+    Authentication,
+    /// Streamed body exceeded its configured ceiling.
+    BodyLimit,
+    /// Request body streaming failed.
+    BodyStream,
+    /// Protected raw storage failed.
+    RawStorage,
+    /// Existing immutable evidence disagreed.
+    ImmutableConflict,
+    /// Archive path semantics were unsafe.
+    UnsafeArchivePath,
+    /// An archive resource ceiling was exceeded.
+    ArchiveLimit,
+    /// Compression or encryption was unsupported.
+    UnsupportedEncoding,
+    /// Entry type was unsupported.
+    UnsupportedEntryType,
+    /// ZIP structure was malformed.
+    MalformedArchive,
+    /// No parser supports the detected layout.
+    UnsupportedLayout,
+    /// Supported JSON was malformed.
+    InvalidJson,
+    /// `SocialSource` publication failed.
+    Publish,
+    /// Durable persistence failed.
+    Persistence,
+    /// A compare-and-swap transition lost its precondition.
+    StateConflict,
+}
+
+/// Stable bounded Data Export stage label.
+#[must_use]
+pub const fn data_export_stage_label(stage: DataExportStage) -> &'static str {
+    match stage {
+        DataExportStage::Receipt => "receipt",
+        DataExportStage::Inspect => "inspect",
+        DataExportStage::Parse => "parse",
+        DataExportStage::Reconcile => "reconcile",
+    }
+}
+
+/// Stable bounded Data Export outcome label.
+#[must_use]
+pub const fn data_export_outcome_label(outcome: DataExportOutcome) -> &'static str {
+    match outcome {
+        DataExportOutcome::Accepted => "accepted",
+        DataExportOutcome::Replayed => "replayed",
+        DataExportOutcome::Succeeded => "succeeded",
+        DataExportOutcome::Refused => "refused",
+    }
+}
+
+/// Stable bounded completeness gap label.
+#[must_use]
+pub const fn data_export_gap_label(gap: DataExportGap) -> &'static str {
+    match gap {
+        DataExportGap::Matched => "matched",
+        DataExportGap::ExportOnly => "export_only",
+        DataExportGap::CaptureOnly => "capture_only",
+        DataExportGap::NonComparable => "non_comparable",
+    }
+}
+
+/// Stable bounded category label.
+#[must_use]
+pub const fn data_export_category_label(category: DataExportCategory) -> &'static str {
+    match category {
+        DataExportCategory::SavedPosts => "saved_posts",
+        DataExportCategory::Unknown => "unknown",
+    }
+}
+
+/// Stable bounded parser-warning label.
+#[must_use]
+pub const fn data_export_warning_label(warning: DataExportWarning) -> &'static str {
+    match warning {
+        DataExportWarning::UnknownSavedRecord => "unknown_saved_record",
+        DataExportWarning::UnknownSavedSectionField => "unknown_saved_section_field",
+        DataExportWarning::UnknownArchiveSection => "unknown_archive_section",
+        DataExportWarning::MediaBytesReferenceOnly => "media_bytes_reference_only",
+    }
+}
+
+/// Stable bounded failure class label.
+#[must_use]
+pub const fn data_export_failure_label(failure: DataExportFailure) -> &'static str {
+    match failure {
+        DataExportFailure::Authentication => "authentication",
+        DataExportFailure::BodyLimit => "body_limit",
+        DataExportFailure::BodyStream => "body_stream",
+        DataExportFailure::RawStorage => "raw_storage",
+        DataExportFailure::ImmutableConflict => "immutable_conflict",
+        DataExportFailure::UnsafeArchivePath => "unsafe_entry_name",
+        DataExportFailure::ArchiveLimit => "archive_limit",
+        DataExportFailure::UnsupportedEncoding => "unsupported_encoding",
+        DataExportFailure::UnsupportedEntryType => "unsupported_entry_type",
+        DataExportFailure::MalformedArchive => "malformed_archive",
+        DataExportFailure::UnsupportedLayout => "unsupported_layout",
+        DataExportFailure::InvalidJson => "invalid_json",
+        DataExportFailure::Publish => "publish",
+        DataExportFailure::Persistence => "persistence",
+        DataExportFailure::StateConflict => "state_conflict",
+    }
+}
+
+/// Records one pipeline-stage result and its bounded wall time.
+pub fn record_data_export_stage(
+    stage: DataExportStage,
+    outcome: DataExportOutcome,
+    duration: std::time::Duration,
+) {
+    let stage = data_export_stage_label(stage);
+    let outcome = data_export_outcome_label(outcome);
+    counter!(
+        "instagram_data_export_stage_total",
+        "stage" => stage,
+        "outcome" => outcome,
+    )
+    .increment(1);
+    histogram!("instagram_data_export_stage_duration_seconds", "stage" => stage)
+        .record(duration.as_secs_f64());
+}
+
+/// Records one streaming receipt result with its bounded wall time.
+pub fn record_data_export_receipt(outcome: DataExportOutcome, duration: std::time::Duration) {
+    record_data_export_stage(DataExportStage::Receipt, outcome, duration);
+}
+
+/// Records a refusal through its closed non-sensitive class.
+pub fn record_data_export_failure(failure: DataExportFailure) {
+    counter!(
+        "instagram_data_export_failure_total",
+        "failure" => data_export_failure_label(failure),
+    )
+    .increment(1);
+}
+
+/// Adds a bounded parsed/unknown category count.
+pub fn record_data_export_category(category: DataExportCategory, count: u64) {
+    counter!(
+        "instagram_data_export_category_records_total",
+        "category" => data_export_category_label(category),
+    )
+    .increment(count);
+}
+
+/// Adds a bounded parser warning count.
+pub fn record_data_export_warning(warning: DataExportWarning, count: u64) {
+    counter!(
+        "instagram_data_export_warnings_total",
+        "warning_kind" => data_export_warning_label(warning),
+    )
+    .increment(count);
+}
+
+/// Sets the most recently reconciled gap cardinality by closed class.
+pub fn record_data_export_gap(gap: DataExportGap, count: u64) {
+    let value = f64::from(u32::try_from(count).unwrap_or(u32::MAX));
+    gauge!(
+        "instagram_data_export_completeness_gap_count",
+        "gap" => data_export_gap_label(gap),
+    )
+    .set(value);
+}
 
 /// Closed official-account operation label inventory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -28,7 +28,10 @@ use serde::Serialize;
 pub mod command_consumer;
 pub mod product;
 
-pub use product::{OfficialAccountRuntime, product_router, product_router_with_official_accounts};
+pub use product::{
+    DataExportRuntime, OfficialAccountRuntime, product_router,
+    product_router_with_official_accounts,
+};
 
 /// No database is configured for this process.
 const DATABASE_ABSENT: u8 = 0;

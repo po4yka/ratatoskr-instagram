@@ -6,14 +6,14 @@ The monolith resolved public embeds and took manual captures without a capabilit
 
 ## The matrix
 
-`ExplicitCapture`, `PublicResolution`, and `OwnAccountSync` are implemented and report `Supported`. Own-account support is conditional per connected account: only a current available `own_media_read` generation may contact the provider; unsupported types and missing permissions become recorded no-ops.
+`ExplicitCapture`, `PublicResolution`, `OwnAccountSync`, and `DataExport` are implemented and report `Supported`. Data Export support means authenticated raw-first import of the one admitted synthetic-fixture grammar; it does not claim compatibility with every provider export or native Saved synchronization. Own-account support is conditional per connected account: only a current available `own_media_read` generation may contact the provider; unsupported types and missing permissions become recorded no-ops.
 
 | Mode | Status | Wire acquisition methods | Authority ceiling |
 |---|---|---|---|
 | `ExplicitCapture` | Supported | `share_extension`, `browser_extension` | `explicit_user_capture` |
 | `PublicResolution` | Supported | `public_resolution` | `explicit_user_capture` |
 | `OwnAccountSync` | Supported | `official_api` | `authoritative_platform_state` |
-| `DataExport` | Planned | `data_export` | `export_observation` |
+| `DataExport` | Supported | `data_export` | `export_observation` |
 | `LegacyImport` | Planned | `legacy_import` | `legacy_observation` |
 
 ## Stated non-capabilities

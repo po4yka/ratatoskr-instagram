@@ -1,16 +1,19 @@
 //! The product plane: explicit capture intake for platform callers.
 //!
-//! One route today — `POST /v1/captures` speaking the documented platform
-//! capture grammar. Refusals are typed JSON bodies (`{"error": code}`), never
+//! The product plane serves explicit capture, official-account commands, and
+//! disabled-by-default owner-authenticated Data Export intake. Refusals are
+//! typed JSON bodies (`{"error": code}`), never
 //! driver messages or internal details: a caller needs the class of the
 /// refusal to fix its request, and nothing else.
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Json;
 use axum::Router;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use metrics::counter;
@@ -18,7 +21,6 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use ratatoskr_instagram_archive::Database;
 use ratatoskr_instagram_archive::account::ProviderRevokeOutcome;
 use ratatoskr_instagram_archive::capability_reconciliation::{
     AccountType, CapabilityReason, CapabilityState, StoredAccountCapability,
@@ -27,10 +29,13 @@ use ratatoskr_instagram_archive::capture::{
     CaptureError, CaptureRequest, CaptureSubmission, ClientSource,
 };
 use ratatoskr_instagram_archive::credentials::crypto::CredentialKeyring;
+use ratatoskr_instagram_archive::data_export::{DataExportStore, ReceiptError, ReceiptOutcome};
 use ratatoskr_instagram_archive::provider::{InstagramProvider, OAuthCodeRelay};
 use ratatoskr_instagram_archive::telemetry::{
-    OAuthOperation, OAuthOutcome, record_oauth_operation,
+    DataExportFailure, DataExportOutcome, OAuthOperation, OAuthOutcome, record_data_export_failure,
+    record_data_export_receipt, record_oauth_operation,
 };
+use ratatoskr_instagram_archive::{DataExportConfig, Database};
 
 /// The only platform this bounded context accepts.
 const PLATFORM: &str = "instagram";
@@ -38,6 +43,21 @@ const PLATFORM: &str = "instagram";
 struct ProductState {
     database: Database,
     official: Option<Arc<OfficialAccountRuntime>>,
+    data_export: Option<Arc<DataExportRuntime>>,
+}
+
+/// Injected, disabled-by-default Data Export intake policy.
+#[derive(Debug)]
+pub struct DataExportRuntime {
+    config: DataExportConfig,
+}
+
+impl DataExportRuntime {
+    /// Creates an enabled Data Export route runtime from validated configuration.
+    #[must_use]
+    pub fn new(config: DataExportConfig) -> Self {
+        Self { config }
+    }
 }
 
 /// Injected official-account dependencies and finite policy.
@@ -114,7 +134,7 @@ impl OfficialAccountRuntime {
 
 /// Builds the product router serving the capture intake.
 pub fn product_router(database: Database) -> Router {
-    product_router_with_official_accounts(database, None)
+    product_router_with_runtimes(database, None, None)
 }
 
 /// Builds the product router with optional disabled-by-default official-account commands.
@@ -122,12 +142,32 @@ pub fn product_router_with_official_accounts(
     database: Database,
     official: Option<OfficialAccountRuntime>,
 ) -> Router {
+    product_router_with_runtimes(database, official, None)
+}
+
+/// Builds the product router with optional authenticated Data Export intake.
+pub fn product_router_with_data_exports(
+    database: Database,
+    data_export: Option<DataExportRuntime>,
+) -> Router {
+    product_router_with_runtimes(database, None, data_export)
+}
+
+/// Builds the product router with every independently configured product runtime.
+pub fn product_router_with_runtimes(
+    database: Database,
+    official: Option<OfficialAccountRuntime>,
+    data_export: Option<DataExportRuntime>,
+) -> Router {
     let state = Arc::new(ProductState {
         database,
         official: official.map(Arc::new),
+        data_export: data_export.map(Arc::new),
     });
     Router::new()
         .route("/v1/captures", post(capture_intake))
+        .route("/v1/data-exports", post(data_export_intake))
+        .route("/v1/data-exports/{run_id}", get(data_export_status))
         .route("/v1/accounts/instagram/oauth/begin", post(oauth_begin))
         .route(
             "/v1/accounts/instagram/oauth/complete",
@@ -146,6 +186,138 @@ pub fn product_router_with_official_accounts(
             post(account_revoke),
         )
         .with_state(state)
+}
+
+async fn data_export_intake(State(state): State<Arc<ProductState>>, request: Request) -> Response {
+    let started = Instant::now();
+    let Some(runtime) = state.data_export.as_ref() else {
+        return data_export_refusal(StatusCode::SERVICE_UNAVAILABLE, "data_export_unavailable");
+    };
+    if !runtime.config.enabled {
+        return data_export_refusal(StatusCode::SERVICE_UNAVAILABLE, "data_export_unavailable");
+    }
+    let Some(user_ref) = data_export_owner(request.headers(), &runtime.config) else {
+        record_data_export_failure(DataExportFailure::Authentication);
+        record_data_export_receipt(DataExportOutcome::Refused, started.elapsed());
+        return data_export_refusal(StatusCode::UNAUTHORIZED, "invalid_data_export_credential");
+    };
+    if request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some("application/zip")
+    {
+        return data_export_refusal(StatusCode::UNSUPPORTED_MEDIA_TYPE, "archive_type_refused");
+    }
+    if request
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > runtime.config.max_body_bytes)
+    {
+        record_data_export_failure(DataExportFailure::BodyLimit);
+        record_data_export_receipt(DataExportOutcome::Refused, started.elapsed());
+        return data_export_refusal(StatusCode::PAYLOAD_TOO_LARGE, "archive_too_large");
+    }
+    let store = match DataExportStore::new(&state.database, &runtime.config) {
+        Ok(store) => store,
+        Err(error) => return data_export_error(&error),
+    };
+    match store
+        .receive(user_ref, request.into_body().into_data_stream())
+        .await
+    {
+        Ok(ReceiptOutcome::Created(receipt)) => {
+            record_data_export_receipt(DataExportOutcome::Accepted, started.elapsed());
+            data_export_no_store((StatusCode::ACCEPTED, Json(receipt)).into_response())
+        }
+        Ok(ReceiptOutcome::Replayed(receipt)) => {
+            record_data_export_receipt(DataExportOutcome::Replayed, started.elapsed());
+            data_export_no_store((StatusCode::OK, Json(receipt)).into_response())
+        }
+        Err(error) => {
+            record_data_export_failure(receipt_failure(&error));
+            record_data_export_receipt(DataExportOutcome::Refused, started.elapsed());
+            data_export_error(&error)
+        }
+    }
+}
+
+async fn data_export_status(
+    State(state): State<Arc<ProductState>>,
+    Path(run_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(runtime) = state.data_export.as_ref() else {
+        return data_export_refusal(StatusCode::SERVICE_UNAVAILABLE, "data_export_unavailable");
+    };
+    if !runtime.config.enabled {
+        return data_export_refusal(StatusCode::SERVICE_UNAVAILABLE, "data_export_unavailable");
+    }
+    let Some(user_ref) = data_export_owner(&headers, &runtime.config) else {
+        return data_export_refusal(StatusCode::UNAUTHORIZED, "invalid_data_export_credential");
+    };
+    let store = match DataExportStore::new(&state.database, &runtime.config) {
+        Ok(store) => store,
+        Err(error) => return data_export_error(&error),
+    };
+    match store.status(user_ref, run_id).await {
+        Ok(Some(status)) => data_export_no_store(Json(status).into_response()),
+        Ok(None) => data_export_refusal(StatusCode::NOT_FOUND, "data_export_not_found"),
+        Err(error) => data_export_error(&error),
+    }
+}
+
+fn data_export_owner(headers: &HeaderMap, config: &DataExportConfig) -> Option<Uuid> {
+    let mut values = headers.get_all(AUTHORIZATION).iter();
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
+    }
+    let token = value
+        .to_str()
+        .ok()
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty() && !value.contains(char::is_whitespace));
+    token.and_then(|token| config.authenticate(token))
+}
+
+fn data_export_error(error: &ReceiptError) -> Response {
+    let (status, code) = match error {
+        ReceiptError::BodyStream => (StatusCode::BAD_REQUEST, "archive_stream_failed"),
+        ReceiptError::BodyLimit => (StatusCode::PAYLOAD_TOO_LARGE, "archive_too_large"),
+        ReceiptError::ImmutableConflict => (StatusCode::CONFLICT, "immutable_blob_conflict"),
+        ReceiptError::RawStorage => (StatusCode::SERVICE_UNAVAILABLE, "archive_storage_failed"),
+        ReceiptError::Persistence(_)
+        | ReceiptError::CorruptEvidence
+        | ReceiptError::BlobContract => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
+    };
+    tracing::error!(error_class = error.class(), "Data Export receipt failed");
+    data_export_refusal(status, code)
+}
+
+const fn receipt_failure(error: &ReceiptError) -> DataExportFailure {
+    match error {
+        ReceiptError::BodyStream => DataExportFailure::BodyStream,
+        ReceiptError::BodyLimit => DataExportFailure::BodyLimit,
+        ReceiptError::RawStorage => DataExportFailure::RawStorage,
+        ReceiptError::ImmutableConflict => DataExportFailure::ImmutableConflict,
+        ReceiptError::Persistence(_)
+        | ReceiptError::CorruptEvidence
+        | ReceiptError::BlobContract => DataExportFailure::Persistence,
+    }
+}
+
+fn data_export_refusal(status: StatusCode, code: &'static str) -> Response {
+    data_export_no_store((status, Json(serde_json::json!({"error": code}))).into_response())
+}
+
+fn data_export_no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 #[derive(Debug, Deserialize)]

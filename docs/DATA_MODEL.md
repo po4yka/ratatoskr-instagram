@@ -21,7 +21,11 @@
   `authoritative_platform_state`; expiring provider URLs remain observations, never BlobRefs.
 - `captures`, canonical URLs, acquisition, saved authority, captured time, notes/collection references.
 - resolved posts/reels, authors, media, relations, upstream status, resolution attempts.
-- `exports`, schema/parser version, archive hash/blob, import runs, warnings, unknown records.
+- `export_snapshots` owns immutable owner/digest receipts and the archive BlobRef;
+  `import_runs` plus `import_run_transitions` enforce `received -> inspected -> parsed -> reconciled`
+  or terminal `failed`; `export_records` retains deterministic normalized, unknown, warning, and
+  conflict staging evidence; `export_completeness_reports` stores sorted exact gap sets/counts and
+  the non-authority disclaimer.
 - write audits if supported, outbox/inbox.
 
 ## Constraints
@@ -32,3 +36,7 @@ Capability and credential replacement share one transaction after provider I/O. 
 credentials and live owner flows while retaining a redacted audit and a total revoked projection.
 Own-media pages commit staging/cursor progress separately, but normalized revisions, outbox facts,
 authority pointer, and watermark change in one completion transaction after capability revalidation.
+Data Export reconciliation likewise commits revisions, idempotent outbox facts, the completeness
+report, and its terminal transition together. A missing export identity never updates captures,
+tombstones, upstream availability, or stronger official/explicit provenance. Archive bytes live
+only under the configured protected blob root; referenced media remains metadata inside that ZIP.

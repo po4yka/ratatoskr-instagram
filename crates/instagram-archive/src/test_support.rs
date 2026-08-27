@@ -9,10 +9,13 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use uuid::Uuid;
 
 use std::collections::{BTreeMap, VecDeque};
+use std::io::{Cursor, Write as _};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use secrecy::SecretString;
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipWriter};
 
 use crate::provider::{
     ExchangedToken, InstagramProvider, OAuthCodeRelay, ProviderAccount, ProviderError,
@@ -21,6 +24,46 @@ use crate::provider::{
 };
 
 use crate::{Database, PersistenceError};
+
+/// Builds deterministic ZIP bytes from the supplied ordered entries.
+///
+/// The helper deliberately preserves input order and duplicate names so hostile
+/// archive tests can express both. ZIP timestamps remain at the crate's fixed
+/// DOS epoch default; repeated calls with identical input produce identical
+/// bytes.
+///
+/// # Errors
+///
+/// Returns [`zip::result::ZipError`] when the in-memory archive cannot be
+/// written.
+pub fn data_export_zip(
+    entries: &[(&str, &[u8])],
+    compression: CompressionMethod,
+) -> Result<Vec<u8>, zip::result::ZipError> {
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(compression);
+    for (name, body) in entries {
+        writer.start_file(*name, options)?;
+        writer.write_all(body)?;
+    }
+    Ok(writer.finish()?.into_inner())
+}
+
+/// Builds a deterministic deflated ZIP containing the synthetic saved-post fixture.
+///
+/// # Errors
+///
+/// Returns [`zip::result::ZipError`] when the in-memory archive cannot be
+/// written.
+pub fn synthetic_saved_posts_export_zip() -> Result<Vec<u8>, zip::result::ZipError> {
+    data_export_zip(
+        &[(
+            "your_instagram_activity/saved/saved_posts.json",
+            include_bytes!("../tests/fixtures/data_export/saved_posts.json"),
+        )],
+        CompressionMethod::Deflated,
+    )
+}
 
 /// How many connections one test may hold. The suite runs several test
 /// binaries at once and each test owns a database, so larger pools exhaust

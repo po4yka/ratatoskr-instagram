@@ -6,12 +6,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
+use crate::credentials::crypto::{CredentialKeyring, KEY_LEN};
+use crate::own_media::OwnMediaSyncConfig;
 use base64::Engine as _;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 
-use crate::credentials::crypto::{CredentialKeyring, KEY_LEN};
-use crate::own_media::OwnMediaSyncConfig;
+mod data_export;
+
+pub use data_export::DataExportConfig;
 
 const ENV_PREFIX: &str = "RATATOSKR__";
 
@@ -34,6 +37,8 @@ pub struct Config {
     pub oauth: OAuthConfig,
     /// Disabled-by-default connected-account own-media scheduler.
     pub own_media: OwnMediaSyncConfig,
+    /// Disabled-by-default authenticated Instagram Data Export intake.
+    pub data_export: DataExportConfig,
     /// `JetStream` command-consumer configuration.
     pub bus: Option<BusConfig>,
 }
@@ -266,6 +271,7 @@ impl Config {
         }
         validate_oauth(&config.oauth, &mut violations);
         validate_own_media(&config, &mut violations);
+        config.data_export.validate(&mut violations);
 
         if config.bus.as_ref().is_none_or(|bus| bus.url.is_empty()) {
             violations.push(Violation {
@@ -677,6 +683,9 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
             Ok(parsed) => config.own_media.call_budget = parsed,
             Err(rule) => violations.push(refused(rule)),
         },
+        key if key.starts_with("RATATOSKR__DATA_EXPORT__") => {
+            config.data_export.apply_environment(key, value, violations);
+        }
         "RATATOSKR__BUS__URL" => {
             if matches!(value.split("://").next(), Some("nats" | "tls")) && !value.contains('@') {
                 let bus = config.bus.get_or_insert_with(default_bus);
@@ -758,6 +767,7 @@ impl Default for Config {
                 pages_per_run: 8,
                 call_budget: 8,
             },
+            data_export: DataExportConfig::default(),
             bus: None,
         }
     }

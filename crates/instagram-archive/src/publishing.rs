@@ -20,6 +20,10 @@ use sha2::Digest as _;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
+mod data_export;
+
+pub(crate) use data_export::append_fact as append_data_export_fact;
+
 /// The platform token every published snapshot carries.
 pub const SOCIAL_PLATFORM: &str = "instagram";
 

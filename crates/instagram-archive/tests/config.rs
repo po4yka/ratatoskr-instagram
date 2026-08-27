@@ -248,3 +248,89 @@ fn own_media_scheduler_is_disabled_by_default_and_rejects_unbounded_limits() {
         .expect_err("enabled own-media scheduling requires finite reviewed limits");
     assert!(error.to_string().contains("OWN_MEDIA"));
 }
+
+#[test]
+fn data_export_configuration_is_disabled_strict_and_secret_free() {
+    const OWNER: &str = "018f1a2b-3c4d-7e6f-8a9b-0c1d2e3f4a5b";
+    const TOKEN: &str = "synthetic-owner-token-abcdefghijklmnopqrstuvwxyz";
+    let defaults = Config::from_environment([("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222")])
+        .expect("the mandatory bus with disabled Data Export loads");
+    assert!(!defaults.data_export.enabled);
+    assert!(
+        defaults
+            .data_export
+            .authenticate("not-configured")
+            .is_none()
+    );
+
+    let incomplete = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        ("RATATOSKR__DATA_EXPORT__ENABLED", "true"),
+    ])
+    .expect_err("enabled Data Export must require both roots and credentials");
+    let incomplete_rendered = incomplete.to_string();
+    assert!(incomplete_rendered.contains("DATA_EXPORT__BLOB_ROOT"));
+    assert!(incomplete_rendered.contains("DATA_EXPORT__STAGING_ROOT"));
+    assert!(incomplete_rendered.contains("DATA_EXPORT__BEARER_TOKENS"));
+
+    let valid = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        ("RATATOSKR__DATA_EXPORT__ENABLED", "true"),
+        (
+            "RATATOSKR__DATA_EXPORT__BLOB_ROOT",
+            "/var/lib/ratatoskr/instagram-export-blobs",
+        ),
+        (
+            "RATATOSKR__DATA_EXPORT__STAGING_ROOT",
+            "/var/lib/ratatoskr/instagram-export-staging",
+        ),
+        (
+            "RATATOSKR__DATA_EXPORT__BEARER_TOKENS",
+            "018f1a2b-3c4d-7e6f-8a9b-0c1d2e3f4a5b:synthetic-owner-token-abcdefghijklmnopqrstuvwxyz",
+        ),
+        ("RATATOSKR__DATA_EXPORT__MAX_BODY_BYTES", "1048576"),
+        ("RATATOSKR__DATA_EXPORT__MAX_ENTRIES", "100"),
+        ("RATATOSKR__DATA_EXPORT__MAX_ENTRY_PATH_BYTES", "256"),
+        ("RATATOSKR__DATA_EXPORT__MAX_PATH_DEPTH", "8"),
+        (
+            "RATATOSKR__DATA_EXPORT__MAX_TOTAL_COMPRESSED_BYTES",
+            "1048576",
+        ),
+        (
+            "RATATOSKR__DATA_EXPORT__MAX_TOTAL_DECOMPRESSED_BYTES",
+            "4194304",
+        ),
+        (
+            "RATATOSKR__DATA_EXPORT__MAX_ENTRY_DECOMPRESSED_BYTES",
+            "1048576",
+        ),
+        ("RATATOSKR__DATA_EXPORT__MAX_COMPRESSION_RATIO", "100"),
+        ("RATATOSKR__DATA_EXPORT__WORKER_POLL_INTERVAL_MS", "1000"),
+        ("RATATOSKR__DATA_EXPORT__WORKER_BATCH_SIZE", "4"),
+    ])
+    .expect("a complete bounded Data Export configuration loads");
+    assert_eq!(
+        valid
+            .data_export
+            .authenticate(TOKEN)
+            .map(|owner| owner.to_string()),
+        Some(OWNER.to_owned())
+    );
+
+    let debug = format!("{:?}", valid.data_export);
+    let serialized = serde_json::to_string(&valid).expect("effective config serializes");
+    for rendered in [&debug, &serialized] {
+        assert!(!rendered.contains(TOKEN), "bearer token leaked: {rendered}");
+        assert!(
+            !rendered.contains(OWNER),
+            "credential mapping leaked: {rendered}"
+        );
+    }
+
+    let unknown = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        ("RATATOSKR__DATA_EXPORT__UNBOUNDED", "true"),
+    ])
+    .expect_err("unknown Data Export keys stay closed");
+    assert!(unknown.to_string().contains("DATA_EXPORT__UNBOUNDED"));
+}

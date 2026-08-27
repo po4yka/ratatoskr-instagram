@@ -545,40 +545,156 @@ comment on table instagram_archive.capture_notes is
 -- ---------------------------------------------------------------------------------------------
 
 create table instagram_archive.export_snapshots (
-    snapshot_id      uuid        primary key,
-    user_ref         uuid        not null,
-    archive_hash     bytea       not null,
-    blob_ref         text        not null,
-    detected_version text,
-    parser_version   text        not null,
-    received_at      timestamptz not null,
-    constraint export_snapshots_archive_hash_key unique (archive_hash)
+    snapshot_id       uuid        primary key,
+    user_ref          uuid        not null,
+    archive_hash      bytea       not null,
+    archive_blob_ref  text        not null,
+    archive_byte_size bigint      not null,
+    received_at       timestamptz not null,
+    constraint export_snapshots_user_archive_hash_key unique (user_ref, archive_hash),
+    constraint export_snapshots_snapshot_user_key unique (snapshot_id, user_ref),
+    constraint export_snapshots_byte_size_check check (archive_byte_size >= 0)
 );
 
 comment on table instagram_archive.export_snapshots is
-    'One immutable Data Export archive: its hash, its BlobStore reference, and who parsed it.';
+    'One immutable owner-scoped Data Export archive receipt. Bytes remain only in protected content-addressed storage.';
 
 -- ---------------------------------------------------------------------------------------------
 -- import_runs
 -- ---------------------------------------------------------------------------------------------
 
 create table instagram_archive.import_runs (
-    run_id              uuid        primary key,
-    snapshot_id         uuid        not null,
-    outcome             text        not null,
-    records_processed   bigint      not null default 0,
-    warnings_summary    text,
-    completeness_report jsonb,
-    started_at          timestamptz not null default now(),
-    finished_at         timestamptz,
+    run_id            uuid        primary key,
+    snapshot_id       uuid        not null,
+    user_ref          uuid        not null,
+    state             text        not null,
+    detected_layout   text,
+    parser_id         text,
+    records_processed bigint      not null default 0,
+    warning_count     bigint      not null default 0,
+    failure_class     text,
+    received_at       timestamptz not null,
+    updated_at        timestamptz not null,
+    finished_at       timestamptz,
+    constraint import_runs_snapshot_id_key unique (snapshot_id),
     constraint import_runs_snapshot_id_fkey foreign key (snapshot_id)
         references instagram_archive.export_snapshots (snapshot_id),
-    constraint import_runs_outcome_check
-        check (outcome in ('running', 'completed', 'completed_with_warnings', 'failed'))
+    constraint import_runs_snapshot_user_fkey foreign key (snapshot_id, user_ref)
+        references instagram_archive.export_snapshots (snapshot_id, user_ref),
+    constraint import_runs_state_check
+        check (state in ('received', 'inspected', 'parsed', 'reconciled', 'failed')),
+    constraint import_runs_counters_check
+        check (records_processed >= 0 and warning_count >= 0),
+    constraint import_runs_failure_check check (
+        (state = 'failed' and failure_class is not null and finished_at is not null)
+        or (state <> 'failed' and failure_class is null)
+    ),
+    constraint import_runs_reconciled_finished_check check (
+        state <> 'reconciled' or finished_at is not null
+    )
 );
 
 comment on table instagram_archive.import_runs is
-    'One restartable parse/reconcile pass over a snapshot, with its completeness evidence.';
+    'Durable received to inspected to parsed to reconciled state for one immutable archive; failed is terminal.';
+
+create index import_runs_worker_state_idx
+    on instagram_archive.import_runs (state, updated_at)
+    where state not in ('reconciled', 'failed');
+
+-- Ordered evidence for every accepted compare-and-swap transition. No archive content or path is
+-- copied into this operational history.
+create table instagram_archive.import_run_transitions (
+    transition_id uuid        primary key,
+    run_id        uuid        not null,
+    ordinal       integer     not null,
+    from_state    text,
+    to_state      text        not null,
+    failure_class text,
+    occurred_at   timestamptz not null,
+    constraint import_run_transitions_run_ordinal_key unique (run_id, ordinal),
+    constraint import_run_transitions_run_id_fkey foreign key (run_id)
+        references instagram_archive.import_runs (run_id),
+    constraint import_run_transitions_ordinal_check check (ordinal > 0),
+    constraint import_run_transitions_state_check check (
+        (from_state is null and to_state = 'received')
+        or (from_state = 'received' and to_state in ('inspected', 'failed'))
+        or (from_state = 'inspected' and to_state in ('parsed', 'failed'))
+        or (from_state = 'parsed' and to_state in ('reconciled', 'failed'))
+    ),
+    constraint import_run_transitions_failure_check check (
+        (to_state = 'failed' and failure_class is not null)
+        or (to_state <> 'failed' and failure_class is null)
+    )
+);
+
+comment on table instagram_archive.import_run_transitions is
+    'Append-only ordered state transition evidence for a Data Export import run.';
+
+-- Staged known and unknown records. The immutable archive BlobRef plus entry identity and digest
+-- is the raw source; payload contains only bounded parsed JSON or normalized metadata.
+create table instagram_archive.export_records (
+    record_id        uuid        primary key,
+    run_id           uuid        not null,
+    evidence_key     text        not null,
+    record_kind      text        not null,
+    category         text        not null,
+    entry_path       text        not null,
+    entry_digest     bytea,
+    entry_byte_size  bigint      not null,
+    provider_id      text,
+    canonical_url    text,
+    payload          jsonb       not null,
+    processed_at     timestamptz not null,
+    constraint export_records_run_evidence_key unique (run_id, evidence_key),
+    constraint export_records_run_id_fkey foreign key (run_id)
+        references instagram_archive.import_runs (run_id),
+    constraint export_records_record_kind_check check (record_kind in
+        ('normalized', 'unknown_record', 'unknown_section', 'conflict', 'warning')),
+    constraint export_records_entry_byte_size_check check (entry_byte_size >= 0)
+);
+
+comment on table instagram_archive.export_records is
+    'Deterministic staged projections and retained unknown/conflict evidence for one import run.';
+
+create table instagram_archive.export_completeness_reports (
+    report_id          uuid        primary key,
+    run_id             uuid        not null,
+    matched            jsonb       not null,
+    export_only        jsonb       not null,
+    capture_only       jsonb       not null,
+    non_comparable     jsonb       not null,
+    matched_count      bigint      not null,
+    export_only_count  bigint      not null,
+    capture_only_count bigint      not null,
+    non_comparable_count bigint    not null,
+    categories         jsonb       not null,
+    warnings           jsonb       not null,
+    authority_disclaimer text      not null,
+    created_at         timestamptz not null,
+    constraint export_completeness_reports_run_id_key unique (run_id),
+    constraint export_completeness_reports_run_id_fkey foreign key (run_id)
+        references instagram_archive.import_runs (run_id),
+    constraint export_completeness_reports_arrays_check check (
+        jsonb_typeof(matched) = 'array'
+        and jsonb_typeof(export_only) = 'array'
+        and jsonb_typeof(capture_only) = 'array'
+        and jsonb_typeof(non_comparable) = 'array'
+        and jsonb_typeof(categories) = 'array'
+        and jsonb_typeof(warnings) = 'array'
+    ),
+    constraint export_completeness_reports_math_check check (
+        matched_count = jsonb_array_length(matched)
+        and export_only_count = jsonb_array_length(export_only)
+        and capture_only_count = jsonb_array_length(capture_only)
+        and non_comparable_count = jsonb_array_length(non_comparable)
+    ),
+    constraint export_completeness_reports_authority_check check (
+        authority_disclaimer = 'An export is one observation; it does not prove complete account history or Instagram native Saved membership, and absence does not prove unsave or deletion.'
+    )
+);
+
+comment on table instagram_archive.export_completeness_reports is
+    'Exact sorted overlap and gap sets. It reports evidence differences and never silently fills or deletes records.';
 
 -- ---------------------------------------------------------------------------------------------
 -- availability_observations

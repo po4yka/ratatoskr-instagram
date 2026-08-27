@@ -2,7 +2,7 @@
 
 `ratatoskr-instagram` is the Instagram account and capture bounded context for Ratatoskr. It combines official account access where available with explicit user-initiated captures, public oEmbed resolution, and versioned Data Export imports.
 
-> **Status:** implementation plan items 1–7 are complete. The disabled-by-default official account lane connects professional accounts and incrementally synchronizes their own media metadata through the reviewed API. Runs are capability-gated, durably checkpointed, bounded, and atomically swap authority only after a complete traversal. Raw JSON has a verifiable BlobRef; expiring provider media URLs are observations, not archived media bytes. Data Export import remains planned.
+> **Status:** implementation plan items 1–8 are complete. The official account and Data Export lanes are disabled by default. Data Export accepts owner-authenticated ZIP uploads, preserves the exact archive through a BlobRef, advances a durable bounded import worker, and returns an owner-scoped completeness report. Its first parser is proved against a synthetic/redacted fixture only; compatibility with a real owner export is not yet verified.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -103,7 +103,9 @@ instagram_captures
 instagram_capture_notes
 instagram_export_snapshots
 instagram_import_runs
-instagram_raw_records
+instagram_import_run_transitions
+instagram_export_records
+instagram_export_completeness_reports
 instagram_availability_observations
 outbox_events
 inbox_events
@@ -202,14 +204,34 @@ Import flow:
 2. compute and preserve the archive hash;
 3. store the original archive immutably;
 4. detect archive structure and parser version;
-5. safely extract into an isolated temporary directory;
+5. inspect ZIP metadata and read only bounded known entries without materializing archive paths;
 6. parse known sections into staging tables;
-7. preserve unknown sections as raw blobs;
+7. preserve unknown sections as archive-linked raw evidence;
 8. reconcile known records without treating absence as deletion;
 9. produce a completeness and warning report;
 10. publish normalized source events where possible.
 
 The importer never claims that a particular export contains a complete Saved list unless the detected provider schema explicitly supports and validates that conclusion.
+
+The implemented upload is `POST /v1/data-exports` with `Content-Type: application/zip` and exactly
+one configured bearer credential. A new immutable receipt returns `202 Accepted`; an exact
+same-owner replay returns `200 OK`. `GET /v1/data-exports/{run_id}` returns only that owner's
+no-store state/report, and another owner receives the same `404` as an unknown run. States are
+`received -> inspected -> parsed -> reconciled`; `failed` is terminal and retains the raw archive.
+
+Enable the lane only with `RATATOSKR__DATA_EXPORT__ENABLED=true`, absolute disjoint private
+`BLOB_ROOT`/`STAGING_ROOT`, and `BEARER_TOKENS` entries formatted as
+`owner-uuid:opaque-token`. Defaults cap the body/compressed archive at 5 GiB, entries at 20,000,
+path bytes/depth at 1,024/12, total decompressed bytes at 20 GiB, one entry at 64 MiB, ratio at
+200, and the worker at four runs per one-second pass. Every value has a finite validation ceiling.
+Tokens are hashed in memory and redacted; raw archive retention/access follows the private
+Instagram blob-root policy.
+
+The only parser id is `instagram-saved-posts-json-v1`, recognizing exactly
+`your_instagram_activity/saved/saved_posts.json`. Unknown entries/records remain archive-linked
+evidence with warnings. The report lists sorted `matched`, `export_only`, `capture_only`, and
+`non_comparable` sets whose counts equal their cardinalities. It does not auto-fill or delete gaps,
+prove complete account history/native Saved membership, or archive referenced media separately.
 
 ## Official account connection
 
@@ -307,9 +329,12 @@ instagram_capture_unavailable
 instagram_oembed_failures
 instagram_account_sync_duration
 instagram_rate_limit_waits
-instagram_export_import_duration
-instagram_export_unknown_records
-instagram_export_completeness
+instagram_data_export_stage_total
+instagram_data_export_stage_duration_seconds
+instagram_data_export_failure_total
+instagram_data_export_category_records_total
+instagram_data_export_warnings_total
+instagram_data_export_completeness_gap_count
 instagram_reauth_required
 ```
 
@@ -332,10 +357,10 @@ Every capture and import records acquisition method, parser or resolver version,
 3. Add the explicit capture command and public resolver/oEmbed adapter.
 4. Publish normalized social-source events.
 5. Integrate Android/iOS Share Extensions and the browser extension.
-6. Add safe versioned Data Export import.
+6. Add safe versioned Data Export import. **Complete for the admitted synthetic fixture grammar.**
 7. Add supported professional-account OAuth and own-media synchronization. **Complete.**
 8. Integrate linked documents with Extractor and analysis with Knowledge.
-9. Add availability revalidation, completeness reports, and provider diagnostics.
+9. Add availability revalidation and provider diagnostics. Data Export completeness reporting is complete.
 
 ## Workspace integration
 
@@ -343,4 +368,4 @@ Planned: `ratatoskr-workspace` will pin Instagram with compatible social contrac
 
 ## Project status
 
-The process foundation, explicit capture, public resolution, SocialSource outbox, official account connection/capability lifecycle, and supported own-media synchronization are implemented and gated by CI. Data Export intake, media-byte archival policy, and separately approved provider writes remain future work. `DEVELOPMENT.md` records the exact local and CI gate commands.
+The process foundation, explicit capture, public resolution, SocialSource outbox, official account connection/capability lifecycle, supported own-media synchronization, and synthetic-fixture-backed Data Export intake are implemented and gated by CI. Real-export parser compatibility, media-byte archival policy, and separately approved provider writes remain future work. `DEVELOPMENT.md` records the exact local and CI gate commands.

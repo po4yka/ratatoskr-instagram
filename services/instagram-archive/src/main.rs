@@ -20,13 +20,16 @@ use async_nats::jetstream;
 use futures_util::StreamExt as _;
 use secrecy::ExposeSecret as _;
 
+use ratatoskr_instagram_archive::data_export::DataExportWorker;
 use ratatoskr_instagram_archive::provider::{
     REFRESH_SUPPORTED, ReqwestInstagramProvider, ReqwestOAuthCodeRelay,
 };
 use ratatoskr_instagram_archive::publishing::TransportError;
 use ratatoskr_instagram_archive::telemetry::SERVICE_NAME;
 use ratatoskr_instagram_archive::{BusConfig, Config, Database, PublisherConfig};
-use ratatoskr_instagram_archive_service::{OfficialAccountRuntime, RuntimeState};
+use ratatoskr_instagram_archive_service::{
+    DataExportRuntime, OfficialAccountRuntime, RuntimeState,
+};
 use uuid::Uuid;
 
 /// How often the prober copies the database answer into the readiness facts.
@@ -156,6 +159,24 @@ async fn tokio_main() -> Result<(), ExitCode> {
     // The publisher drains the outbox at its own cadence; facts are durable
     // rows, so a slow or failed pass degrades freshness, never correctness.
     let publisher = spawn_outbox_publisher(database.clone(), &config.publisher);
+    let data_export_runtime = config
+        .data_export
+        .enabled
+        .then(|| DataExportRuntime::new(config.data_export.clone()));
+    let data_export_worker = if config.data_export.enabled {
+        let worker = DataExportWorker::new(&database, &config.data_export).map_err(|error| {
+            tracing::error!(
+                error_class = error.class(),
+                "Data Export worker could not be configured"
+            );
+            ExitCode::from(78)
+        })?;
+        let (shutdown, receiver) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(async move { worker.run(receiver).await });
+        Some((shutdown, handle))
+    } else {
+        None
+    };
     let own_media_scheduler = if config.own_media.enabled {
         let (keyring, provider) = official_accounts
             .as_ref()
@@ -193,11 +214,25 @@ async fn tokio_main() -> Result<(), ExitCode> {
             api_listener,
             database.clone(),
             official_accounts,
+            data_export_runtime,
             shutdown_bound,
         ),
     );
     prober.abort();
     publisher.abort();
+    if let Some((shutdown, mut worker)) = data_export_worker {
+        let _ = shutdown.send(true);
+        if tokio::time::timeout(shutdown_bound, &mut worker)
+            .await
+            .is_err()
+        {
+            worker.abort();
+            tracing::warn!(
+                error_class = "data_export_worker_shutdown_timeout",
+                "Data Export worker exceeded the shutdown bound"
+            );
+        }
+    }
     if let Some(scheduler) = own_media_scheduler {
         scheduler.abort();
         if let Err(error) = scheduler.await
@@ -378,11 +413,13 @@ async fn serve_product(
     listener: tokio::net::TcpListener,
     database: Database,
     official_accounts: Option<OfficialAccountRuntime>,
+    data_export: Option<DataExportRuntime>,
     shutdown_timeout: Duration,
 ) -> Result<(), String> {
-    let router = ratatoskr_instagram_archive_service::product_router_with_official_accounts(
+    let router = ratatoskr_instagram_archive_service::product::product_router_with_runtimes(
         database,
         official_accounts,
+        data_export,
     );
     serve_plane("product", listener, router, || (), shutdown_timeout).await
 }

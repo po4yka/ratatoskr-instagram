@@ -6,8 +6,8 @@
 //! The foundation owns process configuration, telemetry bootstrap, and
 //! application of the first-version `instagram_archive` schema. Explicit
 //! capture intake, public resolution, official account connection, and
-//! supported own-media synchronization are implemented; Data Export imports
-//! arrive with a later implementation plan item.
+//! supported own-media synchronization, and raw-first Instagram Data Export
+//! intake are implemented.
 
 /// Official-account refresh, downgrade, and revoke persistence.
 pub mod account;
@@ -26,6 +26,8 @@ pub mod command_capture;
 pub mod config;
 /// Authenticated encryption for provider credential material.
 pub mod credentials;
+/// Authenticated raw-first Data Export receipt and durable import evidence.
+pub mod data_export;
 /// The owned `PostgreSQL` pool and the embedded `instagram_archive` schema.
 pub mod database;
 /// Owner-bound OAuth begin and callback completion.
@@ -60,8 +62,8 @@ pub use command_capture::{
     decode_browser_capture_command,
 };
 pub use config::{
-    AdminConfig, BusConfig, Config, ConfigError, Limits, OAuthConfig, PublisherConfig,
-    StorageConfig, TelemetryConfig,
+    AdminConfig, BusConfig, Config, ConfigError, DataExportConfig, Limits, OAuthConfig,
+    PublisherConfig, StorageConfig, TelemetryConfig,
 };
 pub use database::{Database, PersistenceError};
 pub use permalink::{CanonicalPermalink, PermalinkError, PermalinkKind};

@@ -14,8 +14,8 @@ The library SHALL expose a total lookup that, for each documented acquisition mo
 
 #### Scenario: No mode claims support it does not have
 
-- **WHEN** the support statuses of `DataExport` and `LegacyImport` are inspected while their implementing plan items are still open
-- **THEN** neither reports `Supported`
+- **WHEN** the support status of `LegacyImport` is inspected while its implementing plan item is still open
+- **THEN** it does not report `Supported`
 
 #### Scenario: The implemented explicit-capture lane reports support
 
@@ -31,6 +31,11 @@ The library SHALL expose a total lookup that, for each documented acquisition mo
 
 - **WHEN** the capability of `OwnAccountSync` is looked up after own-media synchronization lands
 - **THEN** it reports `Supported` while keeping its documented wire method (`official_api`) and its `authoritative_platform_state` ceiling for observed own-media state
+
+#### Scenario: The implemented Data Export lane reports support
+
+- **WHEN** the capability of `DataExport` is looked up after immutable receipt, hostile inspection, versioned parsing, reconciliation, and completeness reporting land
+- **THEN** it reports `Supported` while keeping its documented wire method (`data_export`) and its `export_observation` authority ceiling
 
 ### Requirement: The native Saved list is a stated non-capability
 Because no supported provider surface exposes a personal account's native Saved list, the capability matrix SHALL report native Saved-list synchronization as `NotSupported` together with that reason, and no acquisition mode's authority path SHALL be able to produce a claim that the user's native Saved membership is known from an explicit capture.
