@@ -4,7 +4,7 @@
 
 The service stores explicit captures, their public-resolution revisions, and availability observations in `instagram_archive`, and owns a transactional `outbox_events` table that nothing writes yet. The workspace contracts repository publishes the `ratatoskr-social-contracts` crate (capability `social-source-contracts`) with the two payloads this change emits and their envelope rules. No sibling repository consumes a contracts crate today. Knowledge has no social analysis family yet; its plan defers that to separate changesets, and its architecture document still names an event (`social.source.upserted.v1`) that the published contract does not define.
 
-Gate status at definition time: the contracts gate passes. The Knowledge gate fails on both branches — no social analysis family exists and no request/linkage interface is agreed anywhere — so the Knowledge-dependent half of plan item 5 is defined here as a draft agreement and is not implemented by this change.
+Gate status: the contracts gate passes and now includes `social.source.removed.v1` plus typed `knowledge.analysis.completed.v1`. The workspace social-analysis intake change defines captured/updated facts as the request flow and the completion payload as the return interface. Knowledge implementation remains outside this repository.
 
 ## Goals / Non-Goals
 
@@ -12,12 +12,12 @@ Goals:
 
 - one truthful publication path for preserved sources, built from stored state only;
 - first productive use of the published social contracts by a second repository;
-- a concrete, reviewable draft of the Instagram-to-Knowledge interface so the missing cross-repo agreements can be ratified.
+- an idempotent Instagram-to-Knowledge linkage and local-deletion interface using those published contracts.
 
 Non-Goals:
 
 - implementing any Knowledge-side behaviour, transport subscription, or analysis family;
-- representing unavailable-only captures or local removals in events under the current contract vocabulary;
+- representing unavailable-only captures without a normalized snapshot;
 - Data Export provenance events (plan item 8 territory) beyond keeping the snapshot builder open to them;
 - any broker topology decision beyond "the outbox hands over durable facts"; NATS subjects are a deployment concern recorded in configuration.
 
@@ -25,7 +25,7 @@ Non-Goals:
 
 ### D1: Publish at first resolution outcome, never at intake
 
-An accepted-but-unresolved capture has unknown upstream availability, no author, and no provider timestamp. The published snapshot requires an author and a closed-vocabulary availability value with no `unknown` state, so publishing at intake would force fabrication. The captured fact is therefore emitted when the first supported public resolution succeeds; the unavailable fallback emits nothing (spec requirement: unavailable outcome publishes nothing).
+An accepted-but-unresolved capture has unknown upstream availability, no normalized content, and no provider timestamp. Publishing at intake would force a snapshot the archive cannot prove. The captured fact is therefore emitted when the first supported public resolution succeeds; the unavailable fallback emits nothing (spec requirement: unavailable outcome publishes nothing).
 
 Alternative rejected: emitting a bare captured fact at intake with placeholder identity. That would publish fabricated authorship and contradict the authority model.
 
@@ -43,7 +43,7 @@ Alternatives rejected: path dependencies (break outside the monorepo checkout), 
 
 ### D4: Snapshot construction is a pure mapping from stored rows
 
-A single builder reads capture, media, latest revision, latest observation, and note-presence rows and produces either a snapshot or a typed refusal. Every field maps from storage: acquisition from `client_source`, authority verbatim, text/media/author from the newest revision, `raw_blob` pointing at the revision's content-addressed blob, digest recomputed from normalized content, completeness decided by the media policy with warnings when metadata-only. Unknown tokens fail construction (D1 rationale applies per field). Notes are read only to confirm existence for product data elsewhere and never enter snapshots.
+A single builder reads capture, media, latest revision, and availability state and produces either a snapshot or a typed refusal. Every field maps from storage: acquisition from `client_source`, authority verbatim, text from the newest revision, `raw_blob` pointing at the revision's content-addressed blob, digest over the emitted normalized shape, completeness decided by the media policy with warnings when metadata-only. Author and publication time remain absent until an approved surface actually observes them. Unknown tokens fail construction (D1 rationale applies per field). Notes never enter snapshots.
 
 ### D5: The outbox stays the only emission point; delivery order follows aggregate commit order
 
@@ -51,17 +51,15 @@ Facts are appended inside the triggering transaction (resolution success, revisi
 
 Alternative rejected: emitting directly from handlers — loses atomicity with the state change and duplicates the durability problem the outbox table was created to own.
 
-### D6: Draft agreement for the Knowledge half (not implemented here)
+### D6: Ratified Knowledge request, completion, and removal boundary
 
-This is the deliverable the failed gate demands. It defines what must be ratified before plan item 5's Knowledge tasks can start:
+The published contracts and workspace social-analysis intake change define the boundary:
 
 1. **Request flow.** Instagram publishes preservation facts; Knowledge consumes them. There is no command channel from Instagram into Knowledge. An analysis request IS the captured/updated fact itself, correlated by `correlation_id` on the envelope. This keeps producers dumb and matches the article-analysis precedent where runs are created from supplied evidence, not pulled.
 2. **Linkage key.** Results link back through `social_source_id` plus the snapshot's `content_digest`: a changed digest means a new analysis run may supersede, an unchanged digest is idempotent. Capture records stay linked by their existing ids; no Knowledge identifier is written into Instagram tables.
-3. **Result return path.** Knowledge publishes its completion facts (`knowledge.analysis.*`); Instagram consumes them through its inbox purely as observational linkage, never as authority over captures. Until that event contract is published, no result-linkage task can be implemented.
-4. **Deletion propagation.** The published vocabulary has no fact for "the user removed this from Ratatoskr" — `deleted_upstream` means the provider removed it, which is a different fact. Privacy deletion therefore requires a new contract element (proposed name `social.source.removed.v1`, payload carrying `social_source_id`, owner, and reason class) plus a tombstone table in this schema. Both belong to a `ratatoskr-workspace` contracts changeset and a schema-bearing change here; neither starts until ratified.
-5. **Unavailable-capture representation.** Closing the gap recorded in the spec requires either an optional author or an author-unknown marker in the snapshot contract — again a contracts-repo changeset, not a local workaround.
-
-Ratification path, in order: a contracts-repository changeset covering items 4–5 (and any vocabulary consequences), a Knowledge changeset creating the social analysis family against those contracts, then a workspace-store spec citing both. Only after all three exist do the gated tasks below become implementable.
+3. **Result return path.** Knowledge publishes `knowledge.analysis.completed.v1`; Instagram consumes it through `inbox_events` and persists only `(capture_id, content_digest, completed_at)`. It neither receives an analysis payload nor lets Knowledge mutate capture authority.
+4. **Deletion propagation.** A local tombstone atomically writes `social.source.removed.v1`, carrying the stable source identity, owner, removal reason and removal time. This is explicitly distinct from `deleted_upstream`; a late completion is skipped so it cannot re-link or resurrect the tombstoned record.
+5. **Unavailable-capture representation.** The existing snapshot permits no truthful complete record for an unavailable-only capture. The service continues to emit nothing rather than manufacture a source.
 
 ## Risks / Trade-offs
 
@@ -71,11 +69,11 @@ Ratification path, in order: a contracts-repository changeset covering items 4�
 
 [Publisher falls behind or fails repeatedly] → unpublished-row depth and failure counters surface on `/metrics`; redelivery is safe by construction, so lag degrades freshness, never correctness.
 
-[Draft agreement drifts from what Knowledge eventually ratifies] → the draft is marked non-normative; the gated tasks cite the future store spec, not this document, once it exists.
+[Knowledge result handling is not live proof] → this repository verifies contract conformance, outbox/inbox semantics and local linkage only; Knowledge deployment and indexing are validated in its own gate.
 
 ## Migration Plan
 
-No schema change and no rollout coordination: the capability activates with the service. Rollback is disabling the publisher via configuration; outbox rows accumulate harmlessly and drain on re-enable. Because consumers do not exist yet, first activation cannot break anyone.
+The current development schema is applied in place to new test and development databases; no migration is introduced. Rollback disables the publisher/consumer loop while durable outbox and inbox rows remain intact. Downstream removal handling is idempotent by source identity.
 
 ## Open Questions
 

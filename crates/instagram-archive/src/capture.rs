@@ -85,6 +85,8 @@ pub enum CaptureStatus {
     Unavailable,
     /// Intake or processing failed after creation.
     Failed,
+    /// The user or retention policy removed the local preserved source.
+    Tombstoned,
 }
 
 impl CaptureStatus {
@@ -96,6 +98,7 @@ impl CaptureStatus {
             "resolved" => Some(Self::Resolved),
             "unavailable" => Some(Self::Unavailable),
             "failed" => Some(Self::Failed),
+            "tombstoned" => Some(Self::Tombstoned),
             _ => None,
         }
     }
@@ -108,6 +111,7 @@ impl CaptureStatus {
             Self::Resolved => "resolved",
             Self::Unavailable => "unavailable",
             Self::Failed => "failed",
+            Self::Tombstoned => "tombstoned",
         }
     }
 }

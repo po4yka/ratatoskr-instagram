@@ -371,8 +371,10 @@ instagram.capture.resolved.v1
 instagram.account.sync_requested.v1
 instagram.account.media_updated.v1
 instagram.export.ingested.v1
-social.source.upserted.v1
-social.source.unavailable.v1
+social.source.captured.v1
+social.source.updated.v1
+social.source.removed.v1
+knowledge.analysis.completed.v1
 social.connection.reauth_required.v1
 ```
 

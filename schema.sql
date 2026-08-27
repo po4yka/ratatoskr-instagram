@@ -270,7 +270,7 @@ create table instagram_archive.captures (
         check (client_source in
             ('ios_share_extension', 'android_share_target', 'browser_extension', 'telegram')),
     constraint captures_status_check
-        check (status in ('accepted', 'resolved', 'unavailable', 'failed')),
+        check (status in ('accepted', 'resolved', 'unavailable', 'failed', 'tombstoned')),
     constraint captures_user_canonical_key unique (user_ref, canonical_url)
 );
 
@@ -278,6 +278,37 @@ comment on table instagram_archive.captures is
     'Explicit user captures. media_id stays open while the item is unresolved or unavailable. '
     '(user_ref, canonical_url) is the deduplicating identity; client_idempotency_key records the '
     'platform operation key for correlation and never participates in identity.';
+
+-- ---------------------------------------------------------------------------------------------
+-- capture_tombstones and capture_analysis_links
+-- ---------------------------------------------------------------------------------------------
+
+create table instagram_archive.capture_tombstones (
+    capture_id uuid primary key,
+    removed_at timestamptz not null,
+    reason text not null,
+    constraint capture_tombstones_capture_id_fkey foreign key (capture_id)
+        references instagram_archive.captures (capture_id),
+    constraint capture_tombstones_reason_check
+        check (reason in ('user_requested', 'retention_policy'))
+);
+
+comment on table instagram_archive.capture_tombstones is
+    'Local removal facts. A tombstone means Ratatoskr no longer preserves the source; it never '
+    'asserts that Instagram removed the provider object.';
+
+create table instagram_archive.capture_analysis_links (
+    capture_id uuid not null,
+    content_digest text not null,
+    completed_at timestamptz not null,
+    constraint capture_analysis_links_pkey primary key (capture_id, content_digest),
+    constraint capture_analysis_links_capture_id_fkey foreign key (capture_id)
+        references instagram_archive.captures (capture_id)
+);
+
+comment on table instagram_archive.capture_analysis_links is
+    'Observational linkage from a preserved capture revision to a completed Knowledge analysis. '
+    'Analysis result contents remain owned by Knowledge.';
 
 comment on constraint captures_acquisition_method_check on instagram_archive.captures is
     'How the capture reached this service. Closed vocabulary; enforced by the database.';

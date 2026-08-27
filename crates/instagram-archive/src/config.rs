@@ -22,6 +22,8 @@ pub struct Config {
     pub telemetry: TelemetryConfig,
     /// Resource and shutdown limits.
     pub limits: Limits,
+    /// Outbox publisher loop configuration.
+    pub publisher: PublisherConfig,
 }
 
 /// Loopback-only operator listener configuration.
@@ -77,6 +79,16 @@ pub struct Limits {
     pub database_acquire_timeout_ms: u64,
     /// Maximum graceful shutdown duration.
     pub shutdown_timeout_ms: u64,
+}
+
+/// Outbox publisher loop configuration. The loop only runs when storage is
+/// configured; without a database there is nothing to publish.
+#[derive(Debug, Clone, Serialize)]
+pub struct PublisherConfig {
+    /// Milliseconds between publisher passes.
+    pub poll_interval_ms: u64,
+    /// Maximum facts claimed per pass.
+    pub batch_size: u32,
 }
 
 /// One configuration violation. The offending key and the rule it broke, and
@@ -225,6 +237,14 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
             Ok(parsed) => config.limits.shutdown_timeout_ms = parsed,
             Err(rule) => violations.push(refused(rule)),
         },
+        "RATATOSKR__PUBLISHER__POLL_INTERVAL_MS" => match parse_positive::<u64>(value) {
+            Ok(parsed) => config.publisher.poll_interval_ms = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__PUBLISHER__BATCH_SIZE" => match parse_positive::<u32>(value) {
+            Ok(parsed) => config.publisher.batch_size = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
         _ => violations.push(refused("is not recognized")),
     }
 }
@@ -259,6 +279,10 @@ impl Default for Config {
                 database_connections: 8,
                 database_acquire_timeout_ms: 5_000,
                 shutdown_timeout_ms: 10_000,
+            },
+            publisher: PublisherConfig {
+                poll_interval_ms: 1_000,
+                batch_size: 16,
             },
         }
     }

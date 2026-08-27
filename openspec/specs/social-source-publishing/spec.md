@@ -1,8 +1,9 @@
-## Purpose
+# social-source-publishing Specification
 
+## Purpose
 Publishes each preserved Instagram source as a normalized SocialSource fact so other Ratatoskr services can index and analyse it: `social.source.captured.v1` when a capture's source is first preserved through supported public resolution, `social.source.updated.v1` when its normalized record changes, both built only from stored provenance and delivered through the transactional outbox.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: A successfully resolved capture publishes exactly one captured event
 
@@ -114,3 +115,41 @@ When a resolution ends in an unavailable fallback, the service SHALL NOT emit an
 
 - **WHEN** a capture's resolution ends in an unavailable fallback
 - **THEN** no social-source fact is appended for that capture and the stored capture record is unchanged apart from its own status and observation rows
+
+### Requirement: A Knowledge completion links the matching preserved revision once
+
+The service SHALL consume `knowledge.analysis.completed.v1` through its
+transactional inbox. It SHALL link a completion only when the owner,
+`social_source_id`, and `content_digest` match one live resolved capture. The
+stored link SHALL contain only the capture id, digest, and completion time;
+the analysis result remains owned by Knowledge. Replaying the same envelope id
+SHALL not create another link.
+
+#### Scenario: matching completion round-trips to the capture
+
+- **WHEN** Knowledge completes analysis for a captured source revision
+- **THEN** the matching capture receives exactly one local digest/completion-time link and the inbox records the delivery as processed
+
+#### Scenario: repeated completion delivery converges
+
+- **WHEN** the same completion envelope is delivered again
+- **THEN** the inbox accepts it as a duplicate and no second linkage row exists
+
+### Requirement: Local tombstones propagate a removal fact without asserting upstream deletion
+
+When the user or retention policy tombstones a capture, the service SHALL
+commit the tombstone and exactly one `social.source.removed.v1` outbox event in
+the same transaction. The event SHALL carry the stable source identity, owner,
+reason, and removal time only; it SHALL not describe an Instagram deletion or
+native Saved-list state. A completion received after the tombstone SHALL be
+recorded as skipped and SHALL not recreate a linkage.
+
+#### Scenario: local deletion emits one typed removal fact
+
+- **WHEN** a preserved capture is tombstoned twice
+- **THEN** one typed removal event and one tombstone exist, with no duplicate event
+
+#### Scenario: a late completion cannot resurrect a tombstone
+
+- **WHEN** Knowledge completes analysis after the matching capture was tombstoned
+- **THEN** no analysis linkage is created for that capture

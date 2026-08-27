@@ -9,6 +9,8 @@
 //! implemented; account connection and Data Export imports arrive with later
 //! implementation plan items.
 
+/// Knowledge completion intake and local capture-result linkage.
+pub mod analysis_linkage;
 /// The capability matrix: acquisition modes, support status, authority
 /// ceilings, and the upstream-versus-preservation boundary.
 pub mod capability;
@@ -20,25 +22,38 @@ pub mod config;
 pub mod database;
 /// Canonicalization of client-delivered Instagram URLs into stable permalinks.
 pub mod permalink;
+/// Social-source publishing: snapshot construction, transactional outbox
+/// appends, and the at-least-once publisher loop over a transport seam.
+pub mod publishing;
 /// Public resolution: the approved surface seam, immutable parser-versioned
 /// revisions of raw payloads, deterministic normalization, and truthful
 /// failure observations.
 pub mod resolution;
 pub mod telemetry;
+/// Local tombstones and `social.source.removed.v1` publication.
+pub mod tombstone;
 
+pub use analysis_linkage::{AnalysisCompletionError, AnalysisCompletionOutcome};
 pub use capability::{
     AcquisitionMode, AvailabilityObservationKind, ModeCapability, NATIVE_SAVED_LIST_SYNC,
     NativeSavedSupport, PreservationState, SavedAuthority, SupportStatus, UpstreamStatus,
     retention_after_observation,
 };
-pub use config::{AdminConfig, Config, ConfigError, Limits, StorageConfig, TelemetryConfig};
+pub use config::{
+    AdminConfig, Config, ConfigError, Limits, PublisherConfig, StorageConfig, TelemetryConfig,
+};
 pub use database::{Database, PersistenceError};
 pub use permalink::{CanonicalPermalink, PermalinkError, PermalinkKind};
+pub use publishing::{
+    EventTransport, FactKind, PRODUCER_NAME, PublishError, SOCIAL_PLATFORM, TransportError,
+    source_identity,
+};
 pub use resolution::{
     NormalizeError, NormalizedMedia, OEMBED_PARSER_VERSION, PublicSurface, ResolutionError,
     ResolutionOutcome, StoredResolution, SurfaceOutcome, kind_media_type, normalize,
 };
 pub use telemetry::{TelemetryError, TelemetryGuard, init_telemetry};
+pub use tombstone::{TombstoneError, TombstoneOutcome};
 
 #[cfg(feature = "test-support")]
 pub mod test_support;

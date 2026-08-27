@@ -133,8 +133,8 @@ The intake surface is implemented on this service's product listener (`POST /v1/
 2. deduplicates on `(user_ref, canonical_url)`: a repeated delivery of the same share reuses the original capture untouched, whatever the new timestamp, note, client source, or idempotency key;
 3. stores the capture with provenance fixed at `explicit_user_capture` and the acquisition method implied by the client source; the platform `Idempotency-Key` is kept for correlation only;
 4. when public resolution fails, appends an availability observation and marks the capture `unavailable`, preserving the URL, save time, and note truthfully instead of fabricating content;
-5. publishes `social.source.upserted.v1` (planned);
-6. lets Knowledge analyse the normalized source asynchronously (planned).
+5. publishes `social.source.captured.v1` at first preservation and `social.source.updated.v1` when the stored normalized record changes;
+6. provides those preserved facts as Knowledge's analysis request flow, records its typed completion linkage locally, and publishes `social.source.removed.v1` if the local capture is tombstoned.
 
 Step 4's resolver exists as of plan item 4: a successful answer stores the raw payload as an immutable parser-versioned revision, normalizes it deterministically into `media`, links the capture, and appends an `available` observation; a failed answer records its kind verbatim. The fallback record shape both paths write is tested today.
 
@@ -227,8 +227,10 @@ instagram.capture.resolved.v1
 instagram.capture.unavailable.v1
 instagram.export.ingest_requested.v1
 instagram.export.ingested.v1
-social.source.upserted.v1
-social.source.unavailable.v1
+social.source.captured.v1
+social.source.updated.v1
+social.source.removed.v1
+knowledge.analysis.completed.v1
 ```
 
 All handlers are idempotent under at-least-once delivery. Replaying a capture or import converges on the same source and snapshot records.

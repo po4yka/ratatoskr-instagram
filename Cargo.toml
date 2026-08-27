@@ -15,6 +15,15 @@ repository = "https://github.com/po4yka/ratatoskr-instagram"
 [workspace.dependencies]
 ratatoskr-instagram-archive         = { version = "=0.1.0", path = "crates/instagram-archive" }
 
+# ---- cross-repository contracts ----
+# Interim sanctioned form per ratatoskr-contracts README: a Cargo git dependency pinned to a
+# full commit SHA over https. The pin is the rev, not the transport; milestone 10 of the
+# contracts repository replaces it with a published version requirement.
+ratatoskr-social-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f75495d89c1a600910345fb575df24b546e9fdf4" }
+ratatoskr-event-envelope   = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f75495d89c1a600910345fb575df24b546e9fdf4" }
+ratatoskr-identifiers      = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f75495d89c1a600910345fb575df24b546e9fdf4" }
+ratatoskr-error-contracts  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f75495d89c1a600910345fb575df24b546e9fdf4" }
+
 # ---- async runtime and HTTP ----
 tokio      = { version = "=1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 axum       = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
@@ -31,6 +40,7 @@ sqlx = { version = "=0.8.6", default-features = false, features = [
     "postgres",
     "time",
     "uuid",
+    "json",
 ] }
 
 # ---- configuration and secrets ----
@@ -45,7 +55,8 @@ metrics-exporter-prometheus = { version = "=0.18.3", default-features = false }
 # ---- identifiers ----
 # `v7` because ratatoskr-contracts mints UUIDv7 for internally minted identity, and the database
 # stores the same bytes; schema.sql deliberately carries no id DEFAULT that could produce v4.
-uuid = { version = "=1.24.1", features = ["v7", "serde"] }
+# `v5` derives the stable per-(owner, permalink) social_source_id without storing it.
+uuid = { version = "=1.24.1", features = ["v5", "v7", "serde"] }
 
 # ---- serialization and errors ----
 serde      = { version = "=1.0.229", features = ["derive"] }

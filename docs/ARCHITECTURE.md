@@ -419,8 +419,10 @@ instagram.capture.resolved.v1
 instagram.capture.unavailable.v1
 instagram.data_export.ingested.v1
 instagram.data_export.partial.v1
-social.source.upserted.v1
-social.source.unavailable.v1
+social.source.captured.v1
+social.source.updated.v1
+social.source.removed.v1
+knowledge.analysis.completed.v1
 ```
 
 Events contain references and bounded metadata, not tokens or large media payloads.

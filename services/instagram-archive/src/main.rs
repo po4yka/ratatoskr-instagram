@@ -18,9 +18,11 @@ use std::time::Duration;
 
 use secrecy::ExposeSecret as _;
 
+use ratatoskr_instagram_archive::publishing::TransportError;
 use ratatoskr_instagram_archive::telemetry::SERVICE_NAME;
-use ratatoskr_instagram_archive::{Config, Database};
+use ratatoskr_instagram_archive::{Config, Database, PublisherConfig};
 use ratatoskr_instagram_archive_service::RuntimeState;
+use uuid::Uuid;
 
 /// How often the prober copies the database answer into the readiness facts.
 ///
@@ -129,6 +131,9 @@ async fn tokio_main() -> Result<(), ExitCode> {
     // The first probe happens before readiness flips, so the process never
     // reports itself ready over an unverified dependency.
     let prober = spawn_database_prober(database.clone(), Arc::clone(&runtime));
+    // The publisher drains the outbox at its own cadence; facts are durable
+    // rows, so a slow or failed pass degrades freshness, never correctness.
+    let publisher = spawn_outbox_publisher(database.clone(), &config.publisher);
     runtime.mark_startup_complete();
     tracing::info!(
         admin = %config.admin.listen_address,
@@ -148,6 +153,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
         serve_product(api_listener, database.clone(), shutdown_bound),
     );
     prober.abort();
+    publisher.abort();
     database.close().await;
 
     match (admin_result, api_result) {
@@ -244,6 +250,54 @@ fn spawn_database_prober(
         loop {
             ticker.tick().await;
             runtime.set_database_reachable(database.ping().await.is_ok());
+        }
+    })
+}
+
+/// The logging carrier behind the transport seam: facts are handed to the
+/// structured log until a broker lane lands. Delivery always succeeds, which
+/// is honest for a log line and keeps at-least-once semantics intact — rows
+/// are marked published only after this returns `Ok`.
+struct LoggingTransport;
+
+impl ratatoskr_instagram_archive::publishing::EventTransport for LoggingTransport {
+    async fn deliver(&self, event_id: Uuid, _envelope_json: &str) -> Result<(), TransportError> {
+        tracing::info!(event = %event_id, "social-source fact delivered to logging transport");
+        Ok(())
+    }
+}
+
+/// Drains the outbox forever, one bounded pass per interval.
+fn spawn_outbox_publisher(
+    database: Database,
+    publisher: &PublisherConfig,
+) -> tokio::task::JoinHandle<()> {
+    let interval = std::time::Duration::from_millis(publisher.poll_interval_ms);
+    let batch_size = publisher.batch_size;
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await; // consume the immediate tick; publish on cadence
+        let transport = LoggingTransport;
+        loop {
+            match ratatoskr_instagram_archive::publishing::run_once(
+                database.pool(),
+                &transport,
+                batch_size,
+            )
+            .await
+            {
+                Ok(summary) if summary.failed > 0 => {
+                    tracing::warn!(
+                        failed = summary.failed,
+                        remaining = summary.remaining,
+                        "outbox pass completed with failures"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => tracing::error!(%error, "outbox pass could not run"),
+            }
+            ticker.tick().await;
         }
     })
 }

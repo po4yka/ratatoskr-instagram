@@ -100,6 +100,9 @@ pub enum ResolutionError {
     /// An archive-owned query failed.
     #[error("an instagram_archive database query failed")]
     Persistence(#[source] sqlx::Error),
+    /// Building the publication fact for this outcome failed truthfulness.
+    #[error("building the social-source fact failed")]
+    Publishing(#[from] crate::publishing::PublishError),
 }
 
 /// The approved public-resolution surface.
@@ -305,6 +308,18 @@ impl Database {
             .upsert_media_projection(&mut transaction, permalink, normalized, resolved_at)
             .await?;
 
+        // First preservation publishes `captured`; every later revision of the
+        // same source publishes `updated`. Counted before this transaction
+        // appends its own revision.
+        let (prior_count,): (i64,) = sqlx::query_as(
+            "select count(*) from instagram_archive.media_revisions r \
+             join instagram_archive.media m on m.media_id = r.media_id where m.permalink = $1",
+        )
+        .bind(&permalink.url)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(ResolutionError::Persistence)?;
+
         let revision_id = Uuid::now_v7();
         sqlx::query(
             "insert into instagram_archive.media_revisions \
@@ -355,6 +370,13 @@ impl Database {
         .execute(&mut *transaction)
         .await
         .map_err(ResolutionError::Persistence)?;
+
+        let fact_kind = if prior_count == 0 {
+            crate::publishing::FactKind::Captured
+        } else {
+            crate::publishing::FactKind::Updated
+        };
+        crate::publishing::append_fact(&mut transaction, fact_kind, capture_id).await?;
 
         transaction
             .commit()
@@ -459,6 +481,42 @@ impl Database {
         .execute(&mut *transaction)
         .await
         .map_err(ResolutionError::Persistence)?;
+
+        // An observed upstream deletion of an already-preserved source is a
+        // normalized-record change: collapse the media status and republish
+        // the preserved content untouched under `deleted_upstream`. Every
+        // other unavailable outcome publishes nothing — the published
+        // snapshot cannot represent an authorless record truthfully yet.
+        if matches!(observed, AvailabilityObservationKind::Deleted) {
+            let linked: Option<(Uuid,)> = sqlx::query_as(
+                "select media_id from instagram_archive.captures \
+                 where capture_id = $1 and media_id is not null",
+            )
+            .bind(capture_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(ResolutionError::Persistence)?;
+            if let Some((media_id,)) = linked {
+                // `Deleted` collapses to the media status of the same name;
+                // every other kind was already excluded by the guard above.
+                sqlx::query(
+                    "update instagram_archive.media set upstream_status = 'deleted', \
+                     updated_at = $2 where media_id = $1",
+                )
+                .bind(media_id)
+                .bind(resolved_at)
+                .execute(&mut *transaction)
+                .await
+                .map_err(ResolutionError::Persistence)?;
+                crate::publishing::append_fact(
+                    &mut transaction,
+                    crate::publishing::FactKind::Updated,
+                    capture_id,
+                )
+                .await?;
+            }
+        }
+
         transaction
             .commit()
             .await
