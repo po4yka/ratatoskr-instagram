@@ -19,13 +19,16 @@ ratatoskr-instagram-archive         = { version = "=0.1.0", path = "crates/insta
 # Interim sanctioned form per ratatoskr-contracts README: a Cargo git dependency pinned to a
 # full commit SHA over https. The pin is the rev, not the transport; milestone 10 of the
 # contracts repository replaces it with a published version requirement.
-ratatoskr-social-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f75495d89c1a600910345fb575df24b546e9fdf4" }
-ratatoskr-event-envelope   = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f75495d89c1a600910345fb575df24b546e9fdf4" }
-ratatoskr-identifiers      = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f75495d89c1a600910345fb575df24b546e9fdf4" }
-ratatoskr-error-contracts  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f75495d89c1a600910345fb575df24b546e9fdf4" }
+ratatoskr-social-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f0dc35fec80e574ea552e9835659fce70360ed79" }
+ratatoskr-event-envelope   = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f0dc35fec80e574ea552e9835659fce70360ed79" }
+ratatoskr-identifiers      = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f0dc35fec80e574ea552e9835659fce70360ed79" }
+ratatoskr-error-contracts  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f0dc35fec80e574ea552e9835659fce70360ed79" }
+ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f0dc35fec80e574ea552e9835659fce70360ed79" }
 
 # ---- async runtime and HTTP ----
 tokio      = { version = "=1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+async-nats = "=0.46.0"
+futures-util = "=0.3.32"
 axum       = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 tower      = { version = "=0.5.3", features = ["util"] }
 http-body-util = "=0.1.5"

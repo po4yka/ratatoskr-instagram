@@ -217,52 +217,65 @@ impl Database {
         &self,
         request: &CaptureRequest,
     ) -> Result<CaptureSubmission, CaptureError> {
-        let permalink = permalink::canonicalize(&request.url).map_err(CaptureError::InvalidUrl)?;
-        let Some(acquisition_method) = request.client_source.acquisition_wire_method() else {
-            return Err(CaptureError::UnsupportedClientSource);
-        };
-
         let mut transaction = self
             .pool()
             .begin()
             .await
             .map_err(CaptureError::Persistence)?;
-        let inserted = sqlx::query(
-            "insert into instagram_archive.captures \
-             (capture_id, user_ref, canonical_url, acquisition_method, saved_authority, \
-              client_source, status, note, client_idempotency_key, captured_at) \
-             values ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8, $9) \
-             on conflict on constraint captures_user_canonical_key do nothing",
-        )
-        .bind(Uuid::now_v7())
-        .bind(request.user_ref)
-        .bind(&permalink.url)
-        .bind(acquisition_method)
-        .bind(EXPLICIT_AUTHORITY)
-        .bind(request.client_source.wire_value())
-        .bind(request.note.as_deref())
-        .bind(request.client_idempotency_key.as_deref())
-        .bind(request.captured_at)
-        .execute(&mut *transaction)
-        .await
-        .map_err(CaptureError::Persistence)?;
-
-        // One read path serves both branches: on a won race the winner is the
-        // row just inserted; on a lost race it is the earlier record.
-        let record = read_capture(&mut transaction, request.user_ref, &permalink.url).await?;
-        let created = inserted.rows_affected() == 1;
+        let submission = submit_capture_in_transaction(&mut transaction, request).await?;
         transaction
             .commit()
             .await
             .map_err(CaptureError::Persistence)?;
-
-        Ok(if created {
-            CaptureSubmission::Created(record)
-        } else {
-            CaptureSubmission::Reused(record)
-        })
+        Ok(submission)
     }
+}
 
+/// Applies explicit capture persistence within a caller-owned transaction.
+///
+/// The caller owns commit or rollback, which lets a broker inbox claim and its
+/// capture mutation become one atomic at-least-once delivery.
+pub(crate) async fn submit_capture_in_transaction(
+    transaction: &mut sqlx::PgConnection,
+    request: &CaptureRequest,
+) -> Result<CaptureSubmission, CaptureError> {
+    let permalink = permalink::canonicalize(&request.url).map_err(CaptureError::InvalidUrl)?;
+    let Some(acquisition_method) = request.client_source.acquisition_wire_method() else {
+        return Err(CaptureError::UnsupportedClientSource);
+    };
+    let inserted = sqlx::query(
+        "insert into instagram_archive.captures \
+             (capture_id, user_ref, canonical_url, acquisition_method, saved_authority, \
+              client_source, status, note, client_idempotency_key, captured_at) \
+             values ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8, $9) \
+             on conflict on constraint captures_user_canonical_key do nothing",
+    )
+    .bind(Uuid::now_v7())
+    .bind(request.user_ref)
+    .bind(&permalink.url)
+    .bind(acquisition_method)
+    .bind(EXPLICIT_AUTHORITY)
+    .bind(request.client_source.wire_value())
+    .bind(request.note.as_deref())
+    .bind(request.client_idempotency_key.as_deref())
+    .bind(request.captured_at)
+    .execute(&mut *transaction)
+    .await
+    .map_err(CaptureError::Persistence)?;
+
+    // One read path serves both branches: on a won race the winner is the
+    // row just inserted; on a lost race it is the earlier record.
+    let record = read_capture(transaction, request.user_ref, &permalink.url).await?;
+    let created = inserted.rows_affected() == 1;
+
+    Ok(if created {
+        CaptureSubmission::Created(record)
+    } else {
+        CaptureSubmission::Reused(record)
+    })
+}
+
+impl Database {
     /// Records that resolution of a captured source failed.
     ///
     /// Appends one availability observation bound to the capture and moves

@@ -16,7 +16,9 @@ name = "ratatoskr-instagram-archive"
 path = "src/main.rs"
 
 [dependencies]
+async-nats.workspace = true
 axum.workspace = true
+futures-util.workspace = true
 metrics.workspace = true
 ratatoskr-instagram-archive = { path = "../../crates/instagram-archive" }
 secrecy.workspace = true
@@ -31,6 +33,7 @@ uuid.workspace = true
 http-body-util.workspace = true
 ratatoskr-instagram-archive = { path = "../../crates/instagram-archive", features = ["test-support"] }
 serde_json.workspace = true
+sqlx.workspace = true
 tower.workspace = true
 
 [lints]

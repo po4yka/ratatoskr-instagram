@@ -24,6 +24,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde::Serialize;
 
+/// The provider-specific JetStream delivery boundary.
+pub mod command_consumer;
 pub mod product;
 
 pub use product::product_router;

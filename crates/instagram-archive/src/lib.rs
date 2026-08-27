@@ -17,6 +17,8 @@ pub mod capability;
 /// Explicit capture intake: submission identity, provenance, and the
 /// unavailable fallback.
 pub mod capture;
+/// Provider-specific browser-command validation and capture handoff.
+pub mod command_capture;
 pub mod config;
 /// The owned `PostgreSQL` pool and the embedded `instagram_archive` schema.
 pub mod database;
@@ -39,8 +41,13 @@ pub use capability::{
     NativeSavedSupport, PreservationState, SavedAuthority, SupportStatus, UpstreamStatus,
     retention_after_observation,
 };
+pub use command_capture::{
+    BrowserCaptureCommand, BrowserCaptureIngested, CommandCaptureError,
+    decode_browser_capture_command,
+};
 pub use config::{
-    AdminConfig, Config, ConfigError, Limits, PublisherConfig, StorageConfig, TelemetryConfig,
+    AdminConfig, BusConfig, Config, ConfigError, Limits, PublisherConfig, StorageConfig,
+    TelemetryConfig,
 };
 pub use database::{Database, PersistenceError};
 pub use permalink::{CanonicalPermalink, PermalinkError, PermalinkKind};
