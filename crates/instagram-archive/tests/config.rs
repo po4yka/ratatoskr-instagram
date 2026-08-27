@@ -137,6 +137,7 @@ fn debug_rendering_of_storage_redacts_the_database_url() {
 
 fn complete_oauth_environment() -> Vec<(&'static str, &'static str)> {
     vec![
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
         ("RATATOSKR__OAUTH__ENABLED", "true"),
         ("RATATOSKR__OAUTH__CLIENT_ID", "123456789"),
         ("RATATOSKR__OAUTH__CLIENT_SECRET", "synthetic-client-secret"),
@@ -163,8 +164,11 @@ fn complete_oauth_environment() -> Vec<(&'static str, &'static str)> {
 
 #[test]
 fn oauth_disabled_accepts_missing_secrets() {
-    let config = Config::from_environment([("RATATOSKR__OAUTH__ENABLED", "false")])
-        .expect("disabled OAuth needs no provider credentials");
+    let config = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        ("RATATOSKR__OAUTH__ENABLED", "false"),
+    ])
+    .expect("disabled OAuth needs no provider credentials");
     assert!(!config.oauth.enabled);
     assert!(config.oauth.client_secret.is_none());
     assert!(config.oauth.keyring.is_none());
