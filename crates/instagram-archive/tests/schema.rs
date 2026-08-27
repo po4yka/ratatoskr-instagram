@@ -11,7 +11,7 @@ use ratatoskr_instagram_archive::Database;
 use ratatoskr_instagram_archive::test_support::{TestDatabase, admin_url};
 
 /// The relations README.md's planned data model declares, no more, no fewer.
-const DECLARED_TABLES: [&str; 21] = [
+const DECLARED_TABLES: [&str; 25] = [
     "accounts",
     "account_capabilities",
     "account_credential_audit",
@@ -23,6 +23,10 @@ const DECLARED_TABLES: [&str; 21] = [
     "media",
     "media_relations",
     "media_revisions",
+    "own_media_sync_state",
+    "own_media_sync_runs",
+    "own_media_sync_items",
+    "own_media_authority",
     "captures",
     "capture_tombstones",
     "capture_analysis_links",
@@ -51,6 +55,64 @@ async fn official_oauth_tables_match_the_current_schema() {
             "official OAuth table {required} must exist"
         );
     }
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
+async fn own_media_schema_carries_resumable_runs_watermarks_and_atomic_authority() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let tables = archive_tables(test.database.pool()).await;
+    let missing = [
+        "own_media_sync_state",
+        "own_media_sync_runs",
+        "own_media_sync_items",
+        "own_media_authority",
+    ]
+    .into_iter()
+    .filter(|required| !tables.iter().any(|table| table == required))
+    .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "own-media schema objects must exist; missing {missing:?}"
+    );
+
+    let required_columns: i64 = sqlx::query_scalar(
+        "select count(*) from information_schema.columns
+         where table_schema = 'instagram_archive'
+           and (table_name, column_name) in (
+             ('own_media_sync_state', 'watermark_provider_media_id'),
+             ('own_media_sync_state', 'next_due_at'),
+             ('own_media_sync_runs', 'next_cursor'),
+             ('own_media_sync_runs', 'candidate_watermark_provider_media_id'),
+             ('own_media_sync_items', 'raw_record_id'),
+             ('own_media_authority', 'run_id')
+           )",
+    )
+    .fetch_one(test.database.pool())
+    .await
+    .expect("the catalog query answers");
+    assert_eq!(
+        required_columns, 6,
+        "checkpoint, watermark, evidence, and authority columns must all exist"
+    );
+
+    let active_run_index: Option<String> = sqlx::query_scalar(
+        "select coalesce(pg_get_expr(indexprs, indrelid), '') || coalesce(pg_get_expr(indpred, indrelid), '')
+         from pg_index
+         where indrelid = 'instagram_archive.own_media_sync_runs'::regclass
+           and indisunique and indpred is not null",
+    )
+    .fetch_optional(test.database.pool())
+    .await
+    .expect("the index catalog query answers");
+    assert!(
+        active_run_index
+            .as_deref()
+            .is_some_and(|predicate| predicate.contains("retryable")),
+        "one partial unique index must cover running and retryable runs"
+    );
+
     test.cleanup().await.expect("cleanup must drop");
 }
 

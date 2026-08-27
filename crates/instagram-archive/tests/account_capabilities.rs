@@ -122,10 +122,10 @@ fn native_saved_is_always_not_supported() {
 }
 
 #[test]
-fn own_account_sync_lane_remains_planned() {
+fn own_account_mode_is_supported_after_item_seven() {
     assert_eq!(
         AcquisitionMode::OwnAccountSync.capability().status,
-        SupportStatus::Planned
+        SupportStatus::Supported
     );
 }
 

@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "id": "18000000000000003",
+      "owner": { "id": "17841400000000000" },
+      "caption": "Synthetic newest image",
+      "media_type": "IMAGE",
+      "media_product_type": "FEED",
+      "media_url": "https://cdn.example.test/media/3.jpg?expires=synthetic",
+      "permalink": "https://www.instagram.com/p/SYNTHETIC3/",
+      "thumbnail_url": null,
+      "timestamp": "2026-08-27T08:00:00+0000",
+      "username": "synthetic_business"
+    },
+    {
+      "id": "18000000000000002",
+      "owner": { "id": "17841400000000000" },
+      "caption": "Synthetic reel metadata",
+      "media_type": "VIDEO",
+      "media_product_type": "REELS",
+      "media_url": "https://cdn.example.test/media/2.mp4?expires=synthetic",
+      "permalink": "https://www.instagram.com/reel/SYNTHETIC2/",
+      "thumbnail_url": "https://cdn.example.test/media/2.jpg?expires=synthetic",
+      "timestamp": "2026-08-26T08:00:00+0000",
+      "username": "synthetic_business"
+    }
+  ],
+  "paging": {
+    "cursors": { "before": "before-1", "after": "cursor-2" },
+    "next": "https://graph.instagram.com/v24.0/17841400000000000/media?after=cursor-2"
+  }
+}

@@ -5,9 +5,9 @@
 //!
 //! The foundation owns process configuration, telemetry bootstrap, and
 //! application of the first-version `instagram_archive` schema. Explicit
-//! capture intake and public resolution through the approved surface are
-//! implemented; account connection and Data Export imports arrive with later
-//! implementation plan items.
+//! capture intake, public resolution, official account connection, and
+//! supported own-media synchronization are implemented; Data Export imports
+//! arrive with a later implementation plan item.
 
 /// Official-account refresh, downgrade, and revoke persistence.
 pub mod account;
@@ -28,6 +28,8 @@ pub mod credentials;
 pub mod database;
 /// Owner-bound OAuth begin and callback completion.
 pub mod oauth;
+/// Capability-gated scheduled synchronization of connected-account own media.
+pub mod own_media;
 /// Canonicalization of client-delivered Instagram URLs into stable permalinks.
 pub mod permalink;
 /// Official Meta Instagram Login adapter contract.

@@ -7,15 +7,18 @@
 //!
 //! This is deliberately not the Facebook Login/Page-linked profile. It serves professional
 //! business and creator accounts, uses the `instagram_business_*` permission family, and requests
-//! only basic read authority in this implementation item. Provider write permissions and own-media
-//! synchronization are absent. The Graph path version is explicit so Meta's default cannot drift.
+//! only basic read authority. Provider write permissions remain absent; own-media reads use only
+//! the connected account's reviewed media edge. The Graph path version is explicit so Meta's
+//! default cannot drift.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::capability_reconciliation::{AccountType, PermissionStatus};
 use crate::provider_budget::RequestClass;
@@ -34,6 +37,8 @@ pub const CODE_EXCHANGE_ENDPOINT: &str = "https://api.instagram.com/oauth/access
 pub const GRAPH_API_ORIGIN: &str = "https://graph.instagram.com";
 /// Fields needed to reconcile account identity and type, no media payload.
 pub const ACCOUNT_DISCOVERY_FIELDS: &str = "id,username,account_type";
+/// Reviewed own-media metadata fields; stories and ephemeral surfaces are absent.
+pub const OWN_MEDIA_FIELDS: &str = "id,owner,caption,media_type,media_product_type,media_url,permalink,thumbnail_url,timestamp,username";
 /// The selected profile exposes refresh of long-lived Instagram user tokens.
 pub const REFRESH_SUPPORTED: bool = true;
 /// No separately reliable revoke call is enabled for this reviewed profile.
@@ -71,6 +76,40 @@ pub struct ProviderPermissions {
     pub statuses: BTreeMap<String, PermissionStatus>,
 }
 
+/// One strictly bounded connected-account media observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderOwnMediaItem {
+    /// Stable provider media identity.
+    pub provider_media_id: String,
+    /// Provider-declared owner identity.
+    pub owner_provider_account_id: String,
+    /// Provider media kind.
+    pub media_type: String,
+    /// Product surface such as feed or reels.
+    pub media_product_type: String,
+    /// Provider canonical media URL.
+    pub permalink: String,
+    /// Mutable caption when exposed.
+    pub caption: Option<String>,
+    /// Strictly parsed provider publication timestamp.
+    pub published_at: OffsetDateTime,
+    /// Expiring provider media URL observation, never a `BlobRef`.
+    pub media_url: Option<String>,
+    /// Expiring provider thumbnail URL observation, never a `BlobRef`.
+    pub thumbnail_url: Option<String>,
+}
+
+/// One accepted provider page plus exact raw evidence bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderOwnMediaPage {
+    /// Ordered newest-first items.
+    pub items: Vec<ProviderOwnMediaItem>,
+    /// Opaque provider continuation for the same traversal.
+    pub next_cursor: Option<String>,
+    /// Exact capped response body used for normalization.
+    pub raw_body: Vec<u8>,
+}
+
 /// Boxed provider future keeps ports object-safe without an async-trait dependency.
 pub type ProviderFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, ProviderError>> + Send + 'a>>;
@@ -96,6 +135,13 @@ pub trait InstagramProvider: Send + Sync {
     ) -> ProviderFuture<'a, ExchangedToken>;
     /// Makes the selected profile's optional provider-side revoke attempt.
     fn revoke_token<'a>(&'a self, access_token: &'a SecretString) -> ProviderFuture<'a, ()>;
+    /// Reads one own-media page for the connected provider account only.
+    fn list_own_media_page<'a>(
+        &'a self,
+        provider_account_id: &'a str,
+        access_token: &'a SecretString,
+        after: Option<&'a str>,
+    ) -> ProviderFuture<'a, ProviderOwnMediaPage>;
 }
 
 /// One single-use callback relay claim returned by Platform.
@@ -374,6 +420,39 @@ impl ReqwestInstagramProvider {
             .map_err(|_| refused(ProviderFailureClass::Validation, None))
     }
 
+    /// Builds an own-media request for the connected provider account.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted error when request construction fails.
+    pub fn own_media_request(
+        &self,
+        provider_account_id: &str,
+        access_token: &SecretString,
+        after: Option<&str>,
+    ) -> Result<reqwest::Request, ProviderError> {
+        if provider_account_id.is_empty() || provider_account_id.contains('/') {
+            return Err(refused(ProviderFailureClass::Validation, None));
+        }
+        let mut url = self
+            .graph_origin
+            .join(&format!("{GRAPH_API_VERSION}/{provider_account_id}/media"))
+            .map_err(|_| refused(ProviderFailureClass::Validation, None))?;
+        url.query_pairs_mut()
+            .append_pair("fields", OWN_MEDIA_FIELDS);
+        if let Some(cursor) = after {
+            if cursor.is_empty() || cursor.len() > 2048 {
+                return Err(refused(ProviderFailureClass::Validation, None));
+            }
+            url.query_pairs_mut().append_pair("after", cursor);
+        }
+        self.client
+            .get(url)
+            .bearer_auth(access_token.expose_secret())
+            .build()
+            .map_err(|_| refused(ProviderFailureClass::Validation, None))
+    }
+
     fn permissions_request(
         &self,
         access_token: &SecretString,
@@ -453,12 +532,67 @@ impl ReqwestInstagramProvider {
         Ok(ProviderPermissions { statuses })
     }
 
+    /// Parses one bounded own-media page.
+    ///
+    /// # Errors
+    ///
+    /// Returns response-refused when the body cannot be decoded.
+    pub fn parse_own_media_page(
+        &self,
+        body: &[u8],
+        provider_account_id: &str,
+    ) -> Result<ProviderOwnMediaPage, ProviderError> {
+        self.ensure_bounded(body)?;
+        let response: OwnMediaResponse = serde_json::from_slice(body)
+            .map_err(|_| refused(ProviderFailureClass::ResponseRefused, None))?;
+        let mut seen = BTreeSet::new();
+        let mut items = Vec::with_capacity(response.data.len());
+        for item in response.data {
+            if item.owner.id != provider_account_id
+                || item.id.is_empty()
+                || !seen.insert(item.id.clone())
+                || !matches!(
+                    item.media_type.as_str(),
+                    "IMAGE" | "VIDEO" | "CAROUSEL_ALBUM"
+                )
+                || !matches!(item.media_product_type.as_str(), "FEED" | "REELS")
+                || reqwest::Url::parse(&item.permalink)
+                    .ok()
+                    .is_none_or(|url| url.scheme() != "https")
+            {
+                return Err(refused(ProviderFailureClass::ResponseRefused, None));
+            }
+            items.push(ProviderOwnMediaItem {
+                provider_media_id: item.id,
+                owner_provider_account_id: item.owner.id,
+                media_type: item.media_type,
+                media_product_type: item.media_product_type,
+                permalink: item.permalink,
+                caption: item.caption,
+                published_at: parse_own_media_timestamp(&item.timestamp)
+                    .ok_or_else(|| refused(ProviderFailureClass::ResponseRefused, None))?,
+                media_url: item.media_url,
+                thumbnail_url: item.thumbnail_url,
+            });
+        }
+        let next_cursor = response
+            .paging
+            .and_then(|paging| paging.cursors.map(|cursors| cursors.after));
+        Ok(ProviderOwnMediaPage {
+            items,
+            next_cursor,
+            raw_body: body.to_vec(),
+        })
+    }
+
     /// Whether this request class and failure may use another attempt.
     #[must_use]
     pub const fn should_retry(request_class: RequestClass, failure: ProviderFailureClass) -> bool {
         matches!(
             request_class,
-            RequestClass::AccountDiscovery | RequestClass::PermissionDiscovery
+            RequestClass::AccountDiscovery
+                | RequestClass::PermissionDiscovery
+                | RequestClass::OwnMediaPage
         ) && matches!(
             failure,
             ProviderFailureClass::Network
@@ -580,6 +714,19 @@ impl InstagramProvider for ReqwestInstagramProvider {
     fn revoke_token<'a>(&'a self, _access_token: &'a SecretString) -> ProviderFuture<'a, ()> {
         Box::pin(async { Err(refused(ProviderFailureClass::Unsupported, None)) })
     }
+
+    fn list_own_media_page<'a>(
+        &'a self,
+        provider_account_id: &'a str,
+        access_token: &'a SecretString,
+        after: Option<&'a str>,
+    ) -> ProviderFuture<'a, ProviderOwnMediaPage> {
+        Box::pin(async move {
+            let request = self.own_media_request(provider_account_id, access_token, after)?;
+            let body = self.execute(request).await?;
+            self.parse_own_media_page(&body, provider_account_id)
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -622,6 +769,79 @@ struct RefreshResponse {
     token_type: Option<String>,
     #[serde(default)]
     expires_in: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnMediaResponse {
+    data: Vec<OwnMediaEntry>,
+    paging: Option<OwnMediaPaging>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnMediaEntry {
+    id: String,
+    owner: OwnMediaOwner,
+    caption: Option<String>,
+    media_type: String,
+    media_product_type: String,
+    media_url: Option<String>,
+    permalink: String,
+    thumbnail_url: Option<String>,
+    timestamp: String,
+    #[allow(dead_code, reason = "strictly accepted mutable provider display field")]
+    username: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnMediaOwner {
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnMediaPaging {
+    cursors: Option<OwnMediaCursors>,
+    #[allow(
+        dead_code,
+        reason = "cursor is the authority; provider URL can contain credentials"
+    )]
+    next: Option<String>,
+    #[allow(
+        dead_code,
+        reason = "cursor is the authority; provider URL can contain credentials"
+    )]
+    previous: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnMediaCursors {
+    #[allow(dead_code, reason = "strictly accepted provider page-control field")]
+    before: String,
+    after: String,
+}
+
+fn parse_own_media_timestamp(value: &str) -> Option<OffsetDateTime> {
+    if let Ok(timestamp) = OffsetDateTime::parse(value, &Rfc3339) {
+        return Some(timestamp);
+    }
+    if !value.is_ascii() {
+        return None;
+    }
+    let split = value.len().checked_sub(5)?;
+    let (prefix, compact_offset) = value.split_at_checked(split)?;
+    let mut offset_chars = compact_offset.chars();
+    if !matches!(offset_chars.next(), Some('+' | '-'))
+        || !offset_chars.all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+    let (hours, minutes) = compact_offset.split_at_checked(3)?;
+    let normalized = format!("{prefix}{hours}:{minutes}");
+    OffsetDateTime::parse(&normalized, &Rfc3339).ok()
 }
 
 fn refused(class: ProviderFailureClass, http_status: Option<u16>) -> ProviderError {

@@ -10,6 +10,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 
 use crate::credentials::crypto::{CredentialKeyring, KEY_LEN};
+use crate::own_media::OwnMediaSyncConfig;
 
 const ENV_PREFIX: &str = "RATATOSKR__";
 
@@ -30,6 +31,8 @@ pub struct Config {
     pub publisher: PublisherConfig,
     /// Disabled-by-default official Instagram OAuth configuration.
     pub oauth: OAuthConfig,
+    /// Disabled-by-default connected-account own-media scheduler.
+    pub own_media: OwnMediaSyncConfig,
 }
 
 /// Official Instagram Login configuration.
@@ -250,6 +253,7 @@ impl Config {
             apply_entry(&mut config, key, value.as_ref(), &mut violations);
         }
         validate_oauth(&config.oauth, &mut violations);
+        validate_own_media(&config, &mut violations);
 
         if violations.is_empty() {
             Ok(config)
@@ -415,6 +419,46 @@ fn validate_oauth(config: &OAuthConfig, violations: &mut Vec<Violation>) {
         60,
         900,
         "RATATOSKR__OAUTH__FLOW_TTL_SECONDS",
+        violations,
+    );
+}
+
+fn validate_own_media(config: &Config, violations: &mut Vec<Violation>) {
+    if !config.own_media.enabled {
+        return;
+    }
+    if !config.oauth.enabled {
+        violations.push(Violation {
+            key: "RATATOSKR__OWN_MEDIA__ENABLED".to_owned(),
+            rule: "requires the reviewed OAuth account lane to be enabled",
+        });
+    }
+    validate_range(
+        config.own_media.cadence_seconds,
+        60,
+        86_400,
+        "RATATOSKR__OWN_MEDIA__CADENCE_SECONDS",
+        violations,
+    );
+    validate_range(
+        u64::from(config.own_media.accounts_per_tick),
+        1,
+        100,
+        "RATATOSKR__OWN_MEDIA__ACCOUNTS_PER_TICK",
+        violations,
+    );
+    validate_range(
+        u64::from(config.own_media.pages_per_run),
+        1,
+        100,
+        "RATATOSKR__OWN_MEDIA__PAGES_PER_RUN",
+        violations,
+    );
+    validate_range(
+        u64::from(config.own_media.call_budget),
+        1,
+        100,
+        "RATATOSKR__OWN_MEDIA__CALL_BUDGET",
         violations,
     );
 }
@@ -593,6 +637,27 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
             Ok(parsed) => config.oauth.flow_ttl_seconds = parsed,
             Err(rule) => violations.push(refused(rule)),
         },
+        "RATATOSKR__OWN_MEDIA__ENABLED" => match value {
+            "true" => config.own_media.enabled = true,
+            "false" => config.own_media.enabled = false,
+            _ => violations.push(refused("must be true or false")),
+        },
+        "RATATOSKR__OWN_MEDIA__CADENCE_SECONDS" => match parse_positive::<u64>(value) {
+            Ok(parsed) => config.own_media.cadence_seconds = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__OWN_MEDIA__ACCOUNTS_PER_TICK" => match parse_positive::<u32>(value) {
+            Ok(parsed) => config.own_media.accounts_per_tick = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__OWN_MEDIA__PAGES_PER_RUN" => match parse_positive::<u32>(value) {
+            Ok(parsed) => config.own_media.pages_per_run = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__OWN_MEDIA__CALL_BUDGET" => match parse_positive::<u32>(value) {
+            Ok(parsed) => config.own_media.call_budget = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
         _ => violations.push(refused("is not recognized")),
     }
 }
@@ -649,6 +714,13 @@ impl Default for Config {
                 discovery_retries: 1,
                 call_budget: 5,
                 flow_ttl_seconds: 600,
+            },
+            own_media: OwnMediaSyncConfig {
+                enabled: false,
+                cadence_seconds: 3_600,
+                accounts_per_tick: 8,
+                pages_per_run: 8,
+                call_budget: 8,
             },
         }
     }

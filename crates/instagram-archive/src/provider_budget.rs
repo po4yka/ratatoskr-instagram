@@ -19,6 +19,8 @@ pub enum RequestClass {
     TokenRefresh,
     /// Optional provider-side token revocation.
     TokenRevoke,
+    /// One connected-account own-media page.
+    OwnMediaPage,
 }
 
 impl RequestClass {
@@ -31,6 +33,7 @@ impl RequestClass {
             Self::PermissionDiscovery => "permission_discovery",
             Self::TokenRefresh => "token_refresh",
             Self::TokenRevoke => "token_revoke",
+            Self::OwnMediaPage => "own_media_page",
         }
     }
 }
@@ -119,6 +122,40 @@ impl ProviderBudget {
             limit,
             next_ordinal: 1,
         }
+    }
+
+    /// Restores the next durable attempt ordinal for a resumable operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BudgetError::Database`] when prior usage cannot be read, or
+    /// [`BudgetError::InvalidMetadata`] when its ordinal cannot fit the closed range.
+    pub async fn resume(
+        database: Database,
+        operation_id: Uuid,
+        account_id: Option<Uuid>,
+        limit: u32,
+    ) -> Result<Self, BudgetError> {
+        let previous: Option<i32> = sqlx::query_scalar(
+            "select max(attempt_ordinal) from instagram_archive.provider_api_usage
+             where operation_id = $1",
+        )
+        .bind(operation_id)
+        .fetch_one(database.pool())
+        .await
+        .map_err(BudgetError::Database)?;
+        let previous = previous.unwrap_or(0);
+        let previous = u32::try_from(previous).map_err(|_| BudgetError::InvalidMetadata)?;
+        let next_ordinal = previous
+            .checked_add(1)
+            .ok_or(BudgetError::InvalidMetadata)?;
+        Ok(Self {
+            database,
+            operation_id,
+            account_id,
+            limit,
+            next_ordinal,
+        })
     }
 
     /// Commits an attempt reservation before the caller invokes transport.

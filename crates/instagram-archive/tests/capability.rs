@@ -111,6 +111,9 @@ fn no_mode_reports_supported_while_its_lane_is_unimplemented() {
         if mode == AcquisitionMode::PublicResolution {
             continue; // implemented by plan item 4; see the dedicated test below.
         }
+        if mode == AcquisitionMode::OwnAccountSync {
+            continue; // implemented by plan item 7; see account_capabilities.rs.
+        }
         let status = mode.capability().status;
         assert_ne!(
             status,

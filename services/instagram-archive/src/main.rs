@@ -152,6 +152,23 @@ async fn tokio_main() -> Result<(), ExitCode> {
     // The publisher drains the outbox at its own cadence; facts are durable
     // rows, so a slow or failed pass degrades freshness, never correctness.
     let publisher = spawn_outbox_publisher(database.clone(), &config.publisher);
+    let own_media_scheduler = if config.own_media.enabled {
+        let (keyring, provider) = official_accounts
+            .as_ref()
+            .ok_or_else(|| {
+                tracing::error!("own-media scheduling requires the official account runtime");
+                ExitCode::from(78)
+            })?
+            .own_media_dependencies();
+        Some(spawn_own_media_scheduler(
+            database.clone(),
+            keyring,
+            provider,
+            config.own_media,
+        ))
+    } else {
+        None
+    };
     runtime.mark_startup_complete();
     tracing::info!(
         admin = %config.admin.listen_address,
@@ -177,6 +194,17 @@ async fn tokio_main() -> Result<(), ExitCode> {
     );
     prober.abort();
     publisher.abort();
+    if let Some(scheduler) = own_media_scheduler {
+        scheduler.abort();
+        if let Err(error) = scheduler.await
+            && !error.is_cancelled()
+        {
+            tracing::error!(
+                error_class = "own_media_scheduler_join",
+                "own-media scheduler stopped unexpectedly"
+            );
+        }
+    }
     database.close().await;
 
     match (admin_result, api_result) {
@@ -392,6 +420,45 @@ fn spawn_outbox_publisher(
                 Err(error) => tracing::error!(%error, "outbox pass could not run"),
             }
             ticker.tick().await;
+        }
+    })
+}
+
+/// Runs disabled-by-default due-account own-media passes at a delayed cadence.
+fn spawn_own_media_scheduler(
+    database: Database,
+    keyring: ratatoskr_instagram_archive::credentials::crypto::CredentialKeyring,
+    provider: Arc<dyn ratatoskr_instagram_archive::provider::InstagramProvider>,
+    config: ratatoskr_instagram_archive::own_media::OwnMediaSyncConfig,
+) -> tokio::task::JoinHandle<()> {
+    let interval = Duration::from_secs(config.cadence_seconds);
+    tokio::spawn(async move {
+        let executor = ratatoskr_instagram_archive::own_media::OwnMediaSyncExecutor::new(
+            &database,
+            &keyring,
+            provider.as_ref(),
+            config,
+        );
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await; // consume the immediate tick
+        loop {
+            ticker.tick().await; // first pass starts after one configured cadence
+            match executor.run_due_once(time::OffsetDateTime::now_utc()).await {
+                Ok(summary) => tracing::info!(
+                    attempted = summary.attempted,
+                    completed = summary.completed,
+                    capability_noops = summary.capability_noops,
+                    retryable = summary.retryable,
+                    failed = summary.failed,
+                    "own-media scheduler pass completed"
+                ),
+                Err(error) => tracing::error!(
+                    error_class = "own_media_scheduler_database",
+                    %error,
+                    "own-media scheduler pass failed"
+                ),
+            }
         }
     })
 }

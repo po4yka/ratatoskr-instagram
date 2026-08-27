@@ -21,6 +21,12 @@ OAuth credentials, professional account data, captures/notes, private/unavailabl
 - **Unbounded/racy provider use:** every attempt is committed as `started` before I/O, retries consume
   a new finite-budget ordinal, and only transient discovery calls retry. Raw headers and bodies are
   never stored in the usage ledger or metric labels.
+- **Partial or stale own-media authority:** one active staged generation per account, durable cursors,
+  completion-only watermarks, and final owner/provider/capability revalidation keep partial or
+  downgraded runs from becoming visible. Bounded-prefix absence never infers deletion.
+- **Fabricated media backup:** exact raw JSON may carry a content-addressed BlobRef, but expiring CDN
+  URLs do not. Events declare partial completeness and empty media attachments until a separate
+  reviewed byte-download policy exists. Stories and foreign-owner responses are refused.
 - **Incomplete disconnect:** local revoke always deletes credential and live flow material and writes
   a revoked capability generation even when remote revoke is unsupported or fails; startup scrubs
   accounts stranded in `revoking`.

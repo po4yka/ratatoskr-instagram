@@ -188,6 +188,21 @@ sequenceDiagram
 
 Account and own-media synchronization uses provider timestamps and stable external IDs when available. Partial scans do not prove deletion. Missing objects transition only under a documented authoritative full-listing or explicit provider deletion signal.
 
+### 6.4. Own-media synchronization
+
+The local scheduler is disabled by default and selects a finite number of due accounts per delayed
+tick. It evaluates the current total `own_media_read` generation before opening credentials. Each
+accepted page stores raw content-addressed JSON, staged metadata, and the opaque continuation in one
+transaction. Retryable runs resume the single active generation.
+
+The durable watermark is the newest stable provider media ID from the last completed traversal, not
+a provider cursor. Incremental completion must reach that prior ID; initial completion must reach
+the collection end. A final transaction revalidates owner, account identity, connection, and
+capability generation, applies normalized revisions and SocialSource outbox facts, swaps the account
+authority pointer, and advances the watermark. Until then observers see only the previous complete
+generation. Prefix absence proves no deletion. Stories, foreign owners, and media-byte downloads are
+outside this lane.
+
 ## 7. Explicit capture lane
 
 ### 7.1. Capture command

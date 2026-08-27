@@ -211,7 +211,7 @@ create table instagram_archive.provider_api_usage (
     constraint provider_api_usage_attempt_ordinal_check check (attempt_ordinal > 0),
     constraint provider_api_usage_request_class_check check (request_class in
         ('code_exchange', 'account_discovery', 'permission_discovery', 'token_refresh',
-         'token_revoke')),
+         'token_revoke', 'own_media_page')),
     constraint provider_api_usage_state_check check (state in ('started', 'completed')),
     constraint provider_api_usage_outcome_check check (outcome is null or outcome in
         ('succeeded', 'authentication', 'validation', 'rate_limited', 'server', 'network',
@@ -354,6 +354,94 @@ create index media_revisions_media_idx
 alter table instagram_archive.media
     add constraint media_current_revision_id_fkey foreign key (current_revision_id)
     references instagram_archive.media_revisions (revision_id);
+
+-- ---------------------------------------------------------------------------------------------
+-- own-media synchronization
+-- ---------------------------------------------------------------------------------------------
+--
+-- Provider pages are staged under one resumable run. Staged rows have no current-state authority:
+-- only a completed run named by own_media_authority is visible as the account's own-media set.
+
+create table instagram_archive.own_media_sync_runs (
+    run_id                                uuid        primary key,
+    account_id                            uuid        not null,
+    user_ref                              uuid        not null,
+    capability_generation_id              uuid,
+    start_watermark_provider_media_id      text,
+    candidate_watermark_provider_media_id  text,
+    next_cursor                            text,
+    status                                 text        not null,
+    outcome_reason                         text,
+    page_count                             bigint      not null default 0,
+    item_count                             bigint      not null default 0,
+    started_at                             timestamptz not null,
+    updated_at                             timestamptz not null,
+    finished_at                            timestamptz,
+    constraint own_media_sync_runs_account_id_fkey foreign key (account_id)
+        references instagram_archive.accounts (account_id),
+    constraint own_media_sync_runs_status_check check (status in
+        ('running', 'retryable', 'completed', 'capability_noop', 'failed')),
+    constraint own_media_sync_runs_reason_check check (outcome_reason is null or outcome_reason in
+        ('completed', 'account_type_unsupported', 'permission_declined', 'permission_expired',
+         'permission_absent', 'permission_unknown', 'reauthorization_required', 'revoked',
+         'owner_mismatch', 'capability_changed', 'budget_exhausted', 'page_limit',
+         'provider_retryable', 'response_refused')),
+    constraint own_media_sync_runs_terminal_check check (
+        (status in ('running', 'retryable') and finished_at is null)
+        or (status in ('completed', 'capability_noop', 'failed') and finished_at is not null)
+    ),
+    constraint own_media_sync_runs_counts_check check (page_count >= 0 and item_count >= 0)
+);
+
+create unique index own_media_sync_runs_one_active_per_account
+    on instagram_archive.own_media_sync_runs (account_id)
+    where status in ('running', 'retryable');
+
+create table instagram_archive.own_media_sync_state (
+    account_id                   uuid        primary key,
+    watermark_provider_media_id  text,
+    next_due_at                  timestamptz not null,
+    last_run_id                  uuid,
+    last_outcome                 text,
+    updated_at                   timestamptz not null,
+    constraint own_media_sync_state_account_id_fkey foreign key (account_id)
+        references instagram_archive.accounts (account_id),
+    constraint own_media_sync_state_last_run_id_fkey foreign key (last_run_id)
+        references instagram_archive.own_media_sync_runs (run_id),
+    constraint own_media_sync_state_last_outcome_check check (last_outcome is null or last_outcome in
+        ('completed', 'capability_noop', 'retryable', 'failed'))
+);
+
+create table instagram_archive.own_media_sync_items (
+    run_id                     uuid        not null,
+    provider_media_id          text        not null,
+    owner_provider_account_id  text        not null,
+    media_type                 text        not null,
+    permalink                  text        not null,
+    caption                    text,
+    published_at               timestamptz,
+    media_url                  text,
+    thumbnail_url              text,
+    raw_record_id              uuid        not null,
+    observed_at                timestamptz not null,
+    constraint own_media_sync_items_pkey primary key (run_id, provider_media_id),
+    constraint own_media_sync_items_run_id_fkey foreign key (run_id)
+        references instagram_archive.own_media_sync_runs (run_id),
+    constraint own_media_sync_items_raw_record_id_fkey foreign key (raw_record_id)
+        references instagram_archive.raw_records (raw_record_id),
+    constraint own_media_sync_items_media_type_check
+        check (media_type in ('image', 'video', 'carousel', 'reel'))
+);
+
+create table instagram_archive.own_media_authority (
+    account_id    uuid        primary key,
+    run_id        uuid        not null,
+    activated_at  timestamptz not null,
+    constraint own_media_authority_account_id_fkey foreign key (account_id)
+        references instagram_archive.accounts (account_id),
+    constraint own_media_authority_run_id_fkey foreign key (run_id)
+        references instagram_archive.own_media_sync_runs (run_id)
+);
 
 -- ---------------------------------------------------------------------------------------------
 -- captures
@@ -545,6 +633,13 @@ comment on table instagram_archive.outbox_events is
 create index outbox_events_unpublished_idx
     on instagram_archive.outbox_events (next_attempt_at)
     where published_at is null;
+
+create unique index outbox_events_own_media_content_key
+    on instagram_archive.outbox_events
+       (aggregate_type, aggregate_id, event_type,
+        (payload #>> '{payload,source,content_digest,hex}'))
+    where aggregate_type = 'media'
+      and event_type in ('social.source.captured.v1', 'social.source.updated.v1');
 
 -- ---------------------------------------------------------------------------------------------
 -- inbox_events

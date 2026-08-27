@@ -14,7 +14,7 @@ use ratatoskr_identifiers::{
 use ratatoskr_social_contracts::{
     AcquisitionMethod, CaptureCompleteness, Platform, PostPermalink, PostText, RemovalReason,
     SavedAuthority, SocialSourceCaptured, SocialSourceRemoved, SocialSourceSnapshot,
-    SocialSourceUpdated, UpstreamAvailability,
+    SocialSourceUpdated, SyncCheckpointCursor, UpstreamAvailability,
 };
 use sha2::Digest as _;
 use sqlx::PgConnection;
@@ -32,6 +32,15 @@ pub const PRODUCER_NAME: &str = "ratatoskr-instagram";
 const IDENTITY_NAMESPACE: Uuid = Uuid::from_bytes([
     0x72, 0x61, 0x74, 0x6f, 0x73, 0x6b, 0x72, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x67, 0x72, 0x61, 0x6d,
 ]);
+type OwnMediaPublishRow = (
+    Uuid,
+    String,
+    String,
+    Option<String>,
+    time::OffsetDateTime,
+    String,
+    i64,
+);
 
 /// Why an event could not be built or appended.
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +82,217 @@ pub fn source_identity(owner: Uuid, canonical_permalink: &str) -> Uuid {
     material.push(0);
     material.extend_from_slice(canonical_permalink.as_bytes());
     Uuid::new_v5(&IDENTITY_NAMESPACE, &material)
+}
+
+/// Derives stable identity for one official own-media provider identity.
+#[must_use]
+pub fn own_media_source_identity(owner: Uuid, provider_media_id: &str) -> Uuid {
+    let mut material = Vec::with_capacity(owner.as_bytes().len() + provider_media_id.len() + 10);
+    material.extend_from_slice(owner.as_bytes());
+    material.extend_from_slice(b"\0official\0");
+    material.extend_from_slice(provider_media_id.as_bytes());
+    Uuid::new_v5(&IDENTITY_NAMESPACE, &material)
+}
+
+/// Appends changed official own-media snapshots from one completing run.
+///
+/// # Errors
+///
+/// Returns [`PublishError`] if stored metadata violates the shared contract or
+/// the caller-owned completion transaction cannot append the outbox rows.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one contract builder keeps every official metadata and BlobRef claim visible"
+)]
+pub async fn append_own_media_facts(
+    transaction: &mut PgConnection,
+    run_id: Uuid,
+    owner: Uuid,
+    checkpoint: Option<&str>,
+    captured_at: time::OffsetDateTime,
+) -> Result<u32, PublishError> {
+    let rows: Vec<OwnMediaPublishRow> = sqlx::query_as(
+        "select m.media_id, i.provider_media_id, i.permalink, i.caption, i.published_at,
+                r.blob_ref, r.byte_size
+         from instagram_archive.own_media_sync_items i
+         join instagram_archive.media m on m.provider_media_id = i.provider_media_id
+         join instagram_archive.raw_records r on r.raw_record_id = i.raw_record_id
+         where i.run_id = $1 order by i.provider_media_id",
+    )
+    .bind(run_id)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let mut appended = 0_u32;
+    for (media_id, provider_media_id, permalink, caption, published_at, blob_ref, byte_size) in rows
+    {
+        let digest = own_media_content_digest(
+            &provider_media_id,
+            &permalink,
+            caption.as_deref(),
+            published_at,
+        )?;
+        let digest_hex = digest.hex.to_string();
+        let prior: Vec<(String, Option<String>)> = sqlx::query_as(
+            "select event_type,
+                    payload #>> '{payload,source,content_digest,hex}' as content_digest
+             from instagram_archive.outbox_events
+             where aggregate_type = 'media' and aggregate_id = $1
+             order by occurred_at, event_id",
+        )
+        .bind(media_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        if prior
+            .iter()
+            .any(|(_, prior_digest)| prior_digest.as_deref() == Some(&digest_hex))
+        {
+            continue;
+        }
+        let kind = if prior.is_empty() {
+            FactKind::Captured
+        } else {
+            FactKind::Updated
+        };
+        let source_id = own_media_source_identity(owner, &provider_media_id);
+        let snapshot = SocialSourceSnapshot {
+            social_source_id: parse_source_id(source_id, media_id)?,
+            platform: Platform::parse(SOCIAL_PLATFORM)
+                .map_err(|error| violation(media_id, &error))?,
+            external_post_id: EntityLocalId::parse(&provider_media_id)
+                .map_err(|error| violation(media_id, &error))?,
+            permalink: Some(
+                PostPermalink::parse(&permalink).map_err(|error| violation(media_id, &error))?,
+            ),
+            owner: owner_ref(owner, media_id)?,
+            author: None,
+            published_at: Some(instant_from_time(published_at, media_id)?),
+            captured_at: instant_from_time(captured_at, media_id)?,
+            text: match caption.as_deref() {
+                Some(text) if !text.is_empty() => {
+                    Some(PostText::parse(text).map_err(|error| text_violation(media_id, error))?)
+                }
+                _ => None,
+            },
+            media: Vec::new(),
+            relations: Vec::new(),
+            folders: Vec::new(),
+            content_digest: digest,
+            raw_blob: Some(BlobRef {
+                owner_service: BlobOwner::parse(PRODUCER_NAME)
+                    .map_err(|error| violation(media_id, &error))?,
+                digest: ContentDigest {
+                    algorithm: DigestAlgorithm::Sha256,
+                    hex: DigestHex::parse(&blob_ref)
+                        .map_err(|error| violation(media_id, &error))?,
+                },
+                media_type: MediaType::parse("application/json")
+                    .map_err(|error| violation(media_id, &error))?,
+                length_bytes: u64::try_from(byte_size)
+                    .map_err(|error| text_violation(media_id, error))?,
+            }),
+            acquisition: AcquisitionMethod::OfficialApi,
+            saved_authority: SavedAuthority::AuthoritativePlatformState,
+            completeness: CaptureCompleteness::Partial,
+            upstream_availability: UpstreamAvailability::Available,
+            checkpoint: checkpoint
+                .map(SyncCheckpointCursor::parse)
+                .transpose()
+                .map_err(|error| text_violation(media_id, error))?,
+            warnings: vec![own_media_warning()],
+            extensions: Extensions::default(),
+        };
+        snapshot
+            .validate()
+            .map_err(|error| text_violation(media_id, error))?;
+        let source_uuid = snapshot.social_source_id.to_string();
+        let owner_value = owner.to_string();
+        let payload_value = if kind == FactKind::Captured {
+            envelope_value_at(
+                &SocialSourceCaptured {
+                    source: snapshot,
+                    extensions: Extensions::default(),
+                },
+                &source_uuid,
+                &owner_value,
+                instant_from_time(captured_at, media_id)?,
+            )?
+        } else {
+            envelope_value_at(
+                &SocialSourceUpdated {
+                    source: snapshot,
+                    extensions: Extensions::default(),
+                },
+                &source_uuid,
+                &owner_value,
+                instant_from_time(captured_at, media_id)?,
+            )?
+        };
+        let event_id = Uuid::now_v7();
+        let result = sqlx::query(
+            "insert into instagram_archive.outbox_events
+             (event_id, event_type, aggregate_type, aggregate_id, payload,
+              correlation_id, causation_id, occurred_at)
+             values ($1, $2, 'media', $3, $4, $5, null, $6)
+             on conflict do nothing",
+        )
+        .bind(event_id)
+        .bind(kind.event_type())
+        .bind(media_id)
+        .bind(payload_value)
+        .bind(event_id)
+        .bind(captured_at)
+        .execute(&mut *transaction)
+        .await?;
+        if result.rows_affected() == 1 {
+            appended = appended.saturating_add(1);
+        }
+    }
+    Ok(appended)
+}
+
+fn own_media_content_digest(
+    provider_media_id: &str,
+    permalink: &str,
+    caption: Option<&str>,
+    published_at: time::OffsetDateTime,
+) -> Result<ContentDigest, PublishError> {
+    let published = published_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|error| text_violation(Uuid::nil(), error))?;
+    let value = serde_json::json!({
+        "provider_media_id": provider_media_id,
+        "permalink": permalink,
+        "caption": caption,
+        "published_at": published,
+        "media": []
+    });
+    let bytes = serde_json::to_vec(&value)?;
+    let mut hex = String::with_capacity(64);
+    for byte in sha2::Sha256::digest(bytes) {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Ok(ContentDigest {
+        algorithm: DigestAlgorithm::Sha256,
+        hex: DigestHex::parse(&hex).map_err(|error| violation(Uuid::nil(), &error))?,
+    })
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "static contract literals fail loudly if their grammar changes"
+)]
+fn own_media_warning() -> WarningEnvelope {
+    WarningEnvelope {
+        code: ErrorCode::parse("social.source.media_not_archived")
+            .expect("static warning code parses"),
+        message: SafeMessage::parse(
+            "Metadata-only sync: media bytes are not archived under the current media policy.",
+        )
+        .expect("static warning message parses"),
+        field_path: None,
+        extensions: Extensions::default(),
+    }
 }
 
 /// Which fact a publication represents.

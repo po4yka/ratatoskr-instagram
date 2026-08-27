@@ -6,13 +6,13 @@ The monolith resolved public embeds and took manual captures without a capabilit
 
 ## The matrix
 
-`ExplicitCapture` is implemented (plan item 3) and `PublicResolution` is implemented (plan item 4); both report `Supported`. Item 6 adds an official-account authorization projection but deliberately does not flip `OwnAccountSync`: the actual own-media operation remains item 7.
+`ExplicitCapture`, `PublicResolution`, and `OwnAccountSync` are implemented and report `Supported`. Own-account support is conditional per connected account: only a current available `own_media_read` generation may contact the provider; unsupported types and missing permissions become recorded no-ops.
 
 | Mode | Status | Wire acquisition methods | Authority ceiling |
 |---|---|---|---|
 | `ExplicitCapture` | Supported | `share_extension`, `browser_extension` | `explicit_user_capture` |
 | `PublicResolution` | Supported | `public_resolution` | `explicit_user_capture` |
-| `OwnAccountSync` | Planned | `official_api` | `authoritative_platform_state` |
+| `OwnAccountSync` | Supported | `official_api` | `authoritative_platform_state` |
 | `DataExport` | Planned | `data_export` | `export_observation` |
 | `LegacyImport` | Planned | `legacy_import` | `legacy_observation` |
 
@@ -34,6 +34,10 @@ Closed reasons distinguish `granted`, unsupported account type, declined/expired
 permission, missing write permission, missing write consent, provider non-support, revocation, and
 reauthorization required. The generation links to preserved raw permission evidence. Callers consume
 this projection and must never reinterpret the originally requested scope as a grant.
+
+The scheduler requests only the connected professional account's non-ephemeral media edge. Stories
+and native Saved remain outside the matrix. Returned foreign-owner items are refused, and a provider
+media URL never becomes a BlobRef unless this service has actually stored and hashed those bytes.
 
 Instagram provides Ratatoskr with no API that reads a personal account's native Saved list. No mode may synthesize that claim: an explicit capture proves the user saved the item to Ratatoskr at `captured_at`, an export proves it was saved at some point in the past, and neither proves current native membership. Deleting a Ratatoskr capture likewise never implies a native unsave.
 

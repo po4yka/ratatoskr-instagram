@@ -217,3 +217,22 @@ fn production_provider_hosts_cannot_be_overridden() {
     let error = Config::from_environment(entries).expect_err("production hosts stay fixed");
     assert!(error.to_string().contains("PROVIDER_BASE_URL"));
 }
+
+#[test]
+fn own_media_scheduler_is_disabled_by_default_and_rejects_unbounded_limits() {
+    let defaults =
+        Config::from_environment(Vec::<(&str, &str)>::new()).expect("default configuration loads");
+    assert!(!defaults.own_media.enabled);
+
+    let mut entries = complete_oauth_environment();
+    entries.extend([
+        ("RATATOSKR__OWN_MEDIA__ENABLED", "true"),
+        ("RATATOSKR__OWN_MEDIA__CADENCE_SECONDS", "999999"),
+        ("RATATOSKR__OWN_MEDIA__ACCOUNTS_PER_TICK", "999999"),
+        ("RATATOSKR__OWN_MEDIA__PAGES_PER_RUN", "999999"),
+        ("RATATOSKR__OWN_MEDIA__CALL_BUDGET", "999999"),
+    ]);
+    let error = Config::from_environment(entries)
+        .expect_err("enabled own-media scheduling requires finite reviewed limits");
+    assert!(error.to_string().contains("OWN_MEDIA"));
+}

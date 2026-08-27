@@ -1,0 +1,17 @@
+{
+  "data": [
+    {
+      "id": "18000000000000001",
+      "owner": { "id": "17841400000000000" },
+      "caption": null,
+      "media_type": "CAROUSEL_ALBUM",
+      "media_product_type": "FEED",
+      "media_url": null,
+      "permalink": "https://www.instagram.com/p/SYNTHETIC1/",
+      "thumbnail_url": null,
+      "timestamp": "2026-08-25T08:00:00+0000",
+      "username": "synthetic_business"
+    }
+  ],
+  "paging": null
+}

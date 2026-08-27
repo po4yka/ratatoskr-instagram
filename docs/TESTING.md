@@ -3,6 +3,9 @@
 Required tests:
 
 - OAuth/account binding, encrypted credentials, refresh/revoke, scopes, and capability drift.
+- Own-media capability no-op, current-generation binding, bounded request grammar, strict synthetic
+  provider fixtures, durable cursor resume, completion-only watermark, atomic retained/refreshed/new
+  authority, downgrade-at-finalization refusal, raw BlobRef truth, and outbox idempotence.
 - URL classification/canonicalization and malicious URL cases.
 - Explicit Share/Browser capture idempotency and provenance.
 - Public post/reel resolution, deleted/private/unsupported/expired responses, unknown fields.
@@ -13,6 +16,7 @@ Required tests:
 - Planned workspace mobile/extension capture -> Instagram -> Knowledge flow.
 
 Fixtures are synthetic or user-authorized and scrubbed; no personal account is required in CI.
+Normal tests download no provider media and contact no live Instagram account.
 
 ## Test-first
 

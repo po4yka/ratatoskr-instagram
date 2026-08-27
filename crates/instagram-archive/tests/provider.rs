@@ -8,7 +8,7 @@
 use secrecy::SecretString;
 
 use ratatoskr_instagram_archive::provider::{
-    BASIC_READ_SCOPE, ProviderFailureClass, ReqwestInstagramProvider,
+    BASIC_READ_SCOPE, OWN_MEDIA_FIELDS, ProviderFailureClass, ReqwestInstagramProvider,
 };
 use ratatoskr_instagram_archive::provider_budget::RequestClass;
 
@@ -154,4 +154,84 @@ fn oauth_code_exchange_is_never_retried() {
             failure
         ));
     }
+}
+
+#[test]
+fn own_media_request_is_owner_scoped_and_omits_ephemeral_fields() {
+    let request = provider(64 * 1024)
+        .own_media_request(
+            "17841400000000000",
+            &SecretString::from(TOKEN),
+            Some("cursor-1"),
+        )
+        .expect("own-media request builds");
+
+    assert_eq!(request.url().path(), "/v26.0/17841400000000000/media");
+    let query = request
+        .url()
+        .query_pairs()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        query.get("fields").map(std::borrow::Cow::as_ref),
+        Some(OWN_MEDIA_FIELDS)
+    );
+    assert_eq!(
+        query.get("after").map(std::borrow::Cow::as_ref),
+        Some("cursor-1")
+    );
+    assert!(!OWN_MEDIA_FIELDS.contains("story"));
+    assert!(!request.url().as_str().contains(TOKEN));
+    assert_eq!(
+        request
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer SYNTHETIC_SENTINEL_ACCESS_TOKEN")
+    );
+}
+
+#[test]
+fn own_media_fixture_rejects_foreign_owner_and_unknown_page_shape() {
+    let provider = provider(64 * 1024);
+    let first = provider
+        .parse_own_media_page(
+            include_bytes!("fixtures/meta/own_media_page_1.json"),
+            "17841400000000000",
+        )
+        .expect("reviewed first page parses");
+    assert_eq!(first.items.len(), 2);
+    assert_eq!(first.next_cursor.as_deref(), Some("cursor-2"));
+    let second = provider
+        .parse_own_media_page(
+            include_bytes!("fixtures/meta/own_media_page_2.json"),
+            "17841400000000000",
+        )
+        .expect("reviewed terminal page parses");
+    assert_eq!(second.items.len(), 1);
+    assert!(second.next_cursor.is_none());
+
+    let foreign = br#"{
+      "data":[{
+        "id":"foreign-1","owner":{"id":"another-account"},"caption":null,
+        "media_type":"IMAGE","media_product_type":"FEED","media_url":null,
+        "permalink":"https://www.instagram.com/p/FOREIGN/","thumbnail_url":null,
+        "timestamp":"2026-08-27T08:00:00Z","username":"foreign"
+      }],"paging":null
+    }"#;
+    assert_eq!(
+        provider
+            .parse_own_media_page(foreign, "17841400000000000")
+            .expect_err("foreign ownership must be refused")
+            .class,
+        ProviderFailureClass::ResponseRefused
+    );
+
+    let unknown = br#"{"data":[],"paging":null,"unreviewed":true}"#;
+    assert_eq!(
+        provider
+            .parse_own_media_page(unknown, "17841400000000000")
+            .expect_err("unknown top-level fields must be refused")
+            .class,
+        ProviderFailureClass::ResponseRefused
+    );
 }

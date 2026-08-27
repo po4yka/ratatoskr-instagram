@@ -104,6 +104,12 @@ impl OfficialAccountRuntime {
             refresh_supported,
         }
     }
+
+    /// Clones the narrow dependencies shared by the disabled-by-default own-media scheduler.
+    #[must_use]
+    pub fn own_media_dependencies(&self) -> (CredentialKeyring, Arc<dyn InstagramProvider>) {
+        (self.keyring.clone(), Arc::clone(&self.provider))
+    }
 }
 
 /// Builds the product router serving the capture intake.

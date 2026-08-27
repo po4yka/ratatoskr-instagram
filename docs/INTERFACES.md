@@ -11,14 +11,16 @@ The loopback product listener implements:
 - the existing `POST /v1/captures` explicit-capture intake.
 
 These are internal loopback commands, not a public callback surface. Authorization codes, OAuth
-state, and tokens are never accepted in command bodies. Own-media sync, Data Export, and event
-commands remain planned.
+state, and tokens are never accepted in command bodies. Own-media sync is a service-local scheduled
+operation with no HTTP command; Data Export commands remain planned.
 
 ## Outbound
 
 The official-account adapter calls Meta's fixed Instagram Login HTTPS endpoints and claims the
-audience-bound callback relay from Platform. Provider credentials remain local. Account/capability
-events and own-media/export flows remain planned.
+audience-bound callback relay from Platform. Provider credentials remain local. The own-media
+adapter calls only the connected account's versioned `/media` edge with a bearer header, fixed
+non-ephemeral fields, and an optional opaque continuation. Accepted completions append normalized
+`social.source.captured.v1` / `social.source.updated.v1` facts through the transactional outbox.
 
 ## Rules
 

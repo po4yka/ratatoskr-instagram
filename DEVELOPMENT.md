@@ -3,7 +3,7 @@
 > Status: Active development
 > Last reviewed: 2026-08-27
 
-Implementation plan items 1–6 are implemented. The official account lane is disabled by default and uses the fixed Instagram Login provider profile with Graph `v26.0`, exactly `instagram_business_basic`, owner-bound Platform relay claims, AES-256-GCM token envelopes, refresh, local revoke scrubbing, capability discovery/reconciliation, and durable finite provider-call accounting. Own-media synchronization remains item 7; Data Export import and eventing are not implemented yet.
+Implementation plan items 1–7 are implemented. The official account lane and its own-media scheduler are disabled by default. Supported professional accounts use Graph `v26.0`, `instagram_business_basic`, encrypted credentials, current capability generations, durable call budgets, resumable page cursors, completion-only watermarks, and atomic own-media authority. Data Export import remains unimplemented.
 
 ## Intended toolchain
 
@@ -72,6 +72,12 @@ redact client secret, relay token, and key material. A separate Platform change 
 Instagram provider/callback and relay grant before operators enable this flag. Key retirement is an
 operator retention decision: keep every version needed to decrypt a live row; this item does not add
 a bulk re-encryption tool.
+
+Own-media traffic additionally requires `RATATOSKR__OWN_MEDIA__ENABLED=true`; the strict companion
+settings are `CADENCE_SECONDS`, `ACCOUNTS_PER_TICK`, `PAGES_PER_RUN`, and `CALL_BUDGET` under the
+same `RATATOSKR__OWN_MEDIA__` prefix. The loop consumes the immediate Tokio interval tick and starts
+only after one cadence. Tests call `run_due_once` directly and never sleep. Keep this flag off until
+the OAuth product has the reviewed permission and deployment authorization.
 
 ## Workflow
 

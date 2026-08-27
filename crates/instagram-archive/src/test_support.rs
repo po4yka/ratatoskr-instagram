@@ -9,13 +9,15 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use uuid::Uuid;
 
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use secrecy::SecretString;
 
 use crate::provider::{
     ExchangedToken, InstagramProvider, OAuthCodeRelay, ProviderAccount, ProviderError,
-    ProviderFailureClass, ProviderFuture, ProviderPermissions, RelayClaim, RelayError, RelayFuture,
+    ProviderFailureClass, ProviderFuture, ProviderOwnMediaPage, ProviderPermissions, RelayClaim,
+    RelayError, RelayFuture,
 };
 
 use crate::{Database, PersistenceError};
@@ -162,12 +164,16 @@ pub enum FakeProviderStep {
     Refresh(Result<ExchangedToken, ProviderError>),
     /// Provider-side revoke result.
     Revoke(Result<(), ProviderError>),
+    /// Connected-account own-media page result.
+    OwnMedia(Result<ProviderOwnMediaPage, ProviderError>),
 }
 
 /// Deterministic no-network official provider.
 #[derive(Debug, Clone)]
 pub struct FakeInstagramProvider {
     steps: Arc<Mutex<VecDeque<FakeProviderStep>>>,
+    calls: Arc<AtomicUsize>,
+    own_media_cursors: Arc<Mutex<Vec<Option<String>>>>,
 }
 
 impl FakeInstagramProvider {
@@ -176,10 +182,13 @@ impl FakeInstagramProvider {
     pub fn new(steps: impl IntoIterator<Item = FakeProviderStep>) -> Self {
         Self {
             steps: Arc::new(Mutex::new(steps.into_iter().collect())),
+            calls: Arc::new(AtomicUsize::new(0)),
+            own_media_cursors: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     fn next(&self) -> Result<FakeProviderStep, ProviderError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
         self.steps
             .lock()
             .map_err(|_| fake_provider_error())?
@@ -191,6 +200,20 @@ impl FakeInstagramProvider {
     #[must_use]
     pub fn remaining(&self) -> usize {
         self.steps.lock().map_or(usize::MAX, |steps| steps.len())
+    }
+
+    /// Number of scripted provider calls attempted.
+    #[must_use]
+    pub fn calls(&self) -> usize {
+        self.calls.load(Ordering::Relaxed)
+    }
+
+    /// Own-media continuation values observed by scripted calls.
+    #[must_use]
+    pub fn own_media_cursors(&self) -> Vec<Option<String>> {
+        self.own_media_cursors
+            .lock()
+            .map_or_else(|_| Vec::new(), |cursors| cursors.clone())
     }
 }
 
@@ -244,6 +267,24 @@ impl InstagramProvider for FakeInstagramProvider {
         Box::pin(async move {
             match self.next()? {
                 FakeProviderStep::Revoke(result) => result,
+                _ => Err(fake_provider_error()),
+            }
+        })
+    }
+
+    fn list_own_media_page<'a>(
+        &'a self,
+        _provider_account_id: &'a str,
+        _access_token: &'a SecretString,
+        after: Option<&'a str>,
+    ) -> ProviderFuture<'a, ProviderOwnMediaPage> {
+        Box::pin(async move {
+            self.own_media_cursors
+                .lock()
+                .map_err(|_| fake_provider_error())?
+                .push(after.map(str::to_owned));
+            match self.next()? {
+                FakeProviderStep::OwnMedia(result) => result,
                 _ => Err(fake_provider_error()),
             }
         })

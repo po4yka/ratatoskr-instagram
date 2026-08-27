@@ -2,7 +2,7 @@
 
 `ratatoskr-instagram` is the Instagram account and capture bounded context for Ratatoskr. It combines official account access where available with explicit user-initiated captures, public oEmbed resolution, and versioned Data Export imports.
 
-> **Status:** implementation plan items 1–6 are complete. In addition to explicit capture and public resolution, the disabled-by-default official account lane now implements Instagram API with Instagram Login for professional accounts: owner-bound OAuth relay completion, encrypted token storage, refresh, complete local revoke scrubbing, durable provider-call budgets, and post-connect reconciliation of the account type and actual granted permissions into a total capability matrix. Own-media synchronization remains plan item 7 and is not implemented; an available `own_media_read` capability records provider authority for that future operation, not synchronized data. Data Export import and events also remain planned.
+> **Status:** implementation plan items 1–7 are complete. The disabled-by-default official account lane connects professional accounts and incrementally synchronizes their own media metadata through the reviewed API. Runs are capability-gated, durably checkpointed, bounded, and atomically swap authority only after a complete traversal. Raw JSON has a verifiable BlobRef; expiring provider media URLs are observations, not archived media bytes. Data Export import remains planned.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -213,7 +213,15 @@ A connected professional account does not expand the authority of captures from 
 The implemented provider profile uses Graph `v26.0` and requests exactly the read-only
 `instagram_business_basic` permission. It discovers account type and permission status after connect
 and refresh; it never infers capabilities from the requested scope. Publishing, comment management,
-messaging, insights, native Saved access, and own-media reads are outside item 6.
+messaging, insights, and native Saved access remain unsupported or outside reviewed scope. Item 7
+uses the observed `own_media_read` capability only for the connected account's media edge.
+
+Own-media scheduling remains off unless `RATATOSKR__OWN_MEDIA__ENABLED=true`. A run advances its
+stable media-id watermark and visible authority together only after reaching the prior watermark
+(or the end of an initial listing). Accepted pages and provider cursors are durable, retryable runs
+resume them, and bounded-prefix absence never deletes old authority. Personal/unknown accounts and
+permission downgrades record explicit no-op outcomes before credentials are opened. Stories are not
+requested, foreign owners are refused, and media bytes are not downloaded by this item.
 
 Tokens are AES-256-GCM envelopes with a versioned keyring, fresh nonce, and authenticated binding to
 the account/flow and token kind. Plaintext is never stored, logged, returned, or published. Revocation
@@ -310,7 +318,7 @@ Every capture and import records acquisition method, parser or resolver version,
 4. Publish normalized social-source events.
 5. Integrate Android/iOS Share Extensions and the browser extension.
 6. Add safe versioned Data Export import.
-7. Add supported professional-account OAuth and own-media synchronization.
+7. Add supported professional-account OAuth and own-media synchronization. **Complete.**
 8. Integrate linked documents with Extractor and analysis with Knowledge.
 9. Add availability revalidation, completeness reports, and provider diagnostics.
 
@@ -320,4 +328,4 @@ Planned: `ratatoskr-workspace` will pin Instagram with compatible social contrac
 
 ## Project status
 
-The process foundation (configuration, telemetry, operator health, typed errors, owned `instagram_archive` schema), the explicit capture lane (permalink canonicalization, idempotent capture identity, unavailable fallback, `POST /v1/captures`), and supported public resolution (approved-surface seam, immutable parser-versioned revisions over content-addressed raw payloads, deterministic normalization, verbatim failure kinds) are implemented and gated by CI. The production network client behind the resolution seam, account connections, imports, media handling, and the event machinery behind those behaviors do not exist yet; those sections above describe the intended Instagram connector architecture. `DEVELOPMENT.md` records the exact local and CI gate commands.
+The process foundation, explicit capture, public resolution, SocialSource outbox, official account connection/capability lifecycle, and supported own-media synchronization are implemented and gated by CI. Data Export intake, media-byte archival policy, and separately approved provider writes remain future work. `DEVELOPMENT.md` records the exact local and CI gate commands.

@@ -13,7 +13,12 @@
 - `account_credential_audit` stores closed lifecycle outcomes and bounded JSON detail.
 - `provider_api_usage` reserves every attempt before I/O and stores ordinal, closed request/outcome,
   optional status, bounded Meta usage percentages, and timestamps with no payload columns.
-- own-media records/revisions and safe raw blob references.
+- `own_media_sync_state` keeps the committed stable media-id watermark and next due time;
+  `own_media_sync_runs` keeps one active resumable traversal and its closed outcome;
+  `own_media_sync_items` stages complete candidate generations linked to raw JSON evidence; and
+  `own_media_authority` points at the one visible completed generation.
+- normalized own-media `media` / immutable `media_revisions` rows use `official_api` and
+  `authoritative_platform_state`; expiring provider URLs remain observations, never BlobRefs.
 - `captures`, canonical URLs, acquisition, saved authority, captured time, notes/collection references.
 - resolved posts/reels, authors, media, relations, upstream status, resolution attempts.
 - `exports`, schema/parser version, archive hash/blob, import runs, warnings, unknown records.
@@ -25,3 +30,5 @@ Owner scope is mandatory. Provider IDs/canonical URLs are unique within relevant
 
 Capability and credential replacement share one transaction after provider I/O. Revocation deletes
 credentials and live owner flows while retaining a redacted audit and a total revoked projection.
+Own-media pages commit staging/cursor progress separately, but normalized revisions, outbox facts,
+authority pointer, and watermark change in one completion transaction after capability revalidation.
