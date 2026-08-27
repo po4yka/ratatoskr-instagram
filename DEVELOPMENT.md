@@ -73,6 +73,14 @@ Instagram provider/callback and relay grant before operators enable this flag. K
 operator retention decision: keep every version needed to decrypt a live row; this item does not add
 a bulk re-encryption tool.
 
+Set mandatory `RATATOSKR__BUS__URL` to a credential-free `nats://` or `tls://` endpoint for the
+durable Instagram browser-capture consumer. In production also set
+`RATATOSKR__BUS__NKEY_SEED_PATH` to the absolute path of the service nkey seed. The NATS role must
+subscribe to `cmd.instagram.capture.requested.v1` and acknowledge the preprovisioned durable
+consumer `ratatoskr_instagram_browser_capture`; Platform owns creation of the `ratatoskr_commands`
+stream and that consumer. The Instagram identity must not receive broad `$JS.API.>` permission.
+Inability to authenticate, connect, or obtain the fixed consumer aborts startup.
+
 ## Workflow
 
 1. Verify the capability exists for the connected account type and current granted scopes.
