@@ -19,8 +19,10 @@ path = "src/main.rs"
 axum.workspace = true
 metrics.workspace = true
 ratatoskr-instagram-archive = { path = "../../crates/instagram-archive" }
+reqwest.workspace = true
 secrecy.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
@@ -30,7 +32,6 @@ uuid.workspace = true
 [dev-dependencies]
 http-body-util.workspace = true
 ratatoskr-instagram-archive = { path = "../../crates/instagram-archive", features = ["test-support"] }
-serde_json.workspace = true
 tower.workspace = true
 
 [lints]

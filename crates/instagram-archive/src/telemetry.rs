@@ -4,12 +4,76 @@
 //! refusal, not a reset: two subscribers or two recorders would split every
 //! observation after startup.
 
-use metrics::gauge;
+use metrics::{counter, gauge};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::config::TelemetryConfig;
+
+/// Closed official-account operation label inventory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthOperation {
+    /// Begin authorization.
+    Begin,
+    /// Complete a callback relay.
+    Complete,
+    /// Refresh token and provider evidence.
+    Refresh,
+    /// Read current capabilities.
+    Capabilities,
+    /// Revoke and scrub locally.
+    Revoke,
+}
+
+/// Closed official-account outcome label inventory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthOutcome {
+    /// Operation completed.
+    Succeeded,
+    /// Feature, owner, flow, or account was unavailable.
+    Unavailable,
+    /// Caller input was invalid.
+    Invalid,
+    /// Provider or relay failed.
+    Upstream,
+    /// Internal persistence or configuration failed.
+    Internal,
+}
+
+/// Stable bounded operation label.
+#[must_use]
+pub const fn oauth_operation_label(operation: OAuthOperation) -> &'static str {
+    match operation {
+        OAuthOperation::Begin => "begin",
+        OAuthOperation::Complete => "complete",
+        OAuthOperation::Refresh => "refresh",
+        OAuthOperation::Capabilities => "capabilities",
+        OAuthOperation::Revoke => "revoke",
+    }
+}
+
+/// Stable bounded outcome label.
+#[must_use]
+pub const fn oauth_outcome_label(outcome: OAuthOutcome) -> &'static str {
+    match outcome {
+        OAuthOutcome::Succeeded => "succeeded",
+        OAuthOutcome::Unavailable => "unavailable",
+        OAuthOutcome::Invalid => "invalid",
+        OAuthOutcome::Upstream => "upstream",
+        OAuthOutcome::Internal => "internal",
+    }
+}
+
+/// Records one bounded official-account lifecycle outcome.
+pub fn record_oauth_operation(operation: OAuthOperation, outcome: OAuthOutcome) {
+    counter!(
+        "instagram_oauth_operations_total",
+        "operation" => oauth_operation_label(operation),
+        "outcome" => oauth_outcome_label(outcome),
+    )
+    .increment(1);
+}
 
 /// The one wire identity of this bounded context.
 pub const SERVICE_NAME: &str = "ratatoskr-instagram-archive";

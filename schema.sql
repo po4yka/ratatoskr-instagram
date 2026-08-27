@@ -45,14 +45,14 @@ create table instagram_archive.accounts (
     username            text        not null,
     account_type        text        not null,
     connection_status   text        not null,
-    scopes              text        not null,
+    scopes              text[]      not null default '{}',
     connected_at        timestamptz not null,
     updated_at          timestamptz not null default now(),
     constraint accounts_provider_account_id_key unique (provider_account_id),
     constraint accounts_account_type_check
-        check (account_type in ('business', 'creator', 'personal')),
+        check (account_type in ('business', 'creator', 'personal', 'unknown')),
     constraint accounts_connection_status_check
-        check (connection_status in ('connected', 'reauthorization_required', 'revoked'))
+        check (connection_status in ('connected', 'reauthorization_required', 'revoking', 'revoked'))
 );
 
 comment on table instagram_archive.accounts is
@@ -65,21 +65,46 @@ comment on table instagram_archive.accounts is
 -- Provider token material, encrypted inside this bounded context. No column holds plaintext.
 
 create table instagram_archive.credentials (
-    credential_id             uuid        primary key,
-    account_id                uuid        not null,
-    access_token_ciphertext   bytea       not null,
-    token_version             integer     not null,
-    scopes                    text        not null,
-    refresh_token_ciphertext  bytea,
-    expires_at                timestamptz,
-    rotated_at                timestamptz,
-    created_at                timestamptz not null default now(),
+    credential_id          uuid        primary key,
+    account_id             uuid        not null,
+    access_token_envelope  bytea       not null,
+    refresh_token_envelope bytea,
+    key_version            integer     not null,
+    granted_permissions    text[]      not null default '{}',
+    expires_at             timestamptz,
+    rotated_at             timestamptz,
+    created_at             timestamptz not null default now(),
+    constraint credentials_account_id_key unique (account_id),
     constraint credentials_account_id_fkey foreign key (account_id)
         references instagram_archive.accounts (account_id)
 );
 
 comment on table instagram_archive.credentials is
     'Encrypted OAuth token material for one account. Ciphertext only, versioned for rotation.';
+
+-- A pending, owner-bound OAuth transaction. Raw state and authorization codes never reach rows.
+create table instagram_archive.oauth_flows (
+    flow_id                uuid        primary key,
+    user_ref               uuid        not null,
+    account_id             uuid,
+    state_hash             bytea       not null,
+    redirect_uri_hash      bytea       not null,
+    pkce_verifier_envelope bytea,
+    key_version            integer,
+    expires_at             timestamptz not null,
+    consumed_at            timestamptz,
+    created_at             timestamptz not null default now(),
+    constraint oauth_flows_state_hash_key unique (state_hash),
+    constraint oauth_flows_account_id_fkey foreign key (account_id)
+        references instagram_archive.accounts (account_id),
+    constraint oauth_flows_pkce_key_pair_check check (
+        (pkce_verifier_envelope is null and key_version is null)
+        or (pkce_verifier_envelope is not null and key_version is not null)
+    )
+);
+
+comment on table instagram_archive.oauth_flows is
+    'Single-use owner-bound OAuth state hashes and optional encrypted PKCE verifiers.';
 
 -- ---------------------------------------------------------------------------------------------
 -- raw_records
@@ -106,6 +131,102 @@ comment on table instagram_archive.raw_records is
     'Content-addressed raw evidence. blob_ref is the lowercase hex SHA-256 of body — the '
     'BlobStore key once bodies move out of rows. Small payloads ride inline in body until '
     'that store exists; normalization reads the bytes, never a reconstruction.';
+
+-- One complete permission-discovery generation. Missing permissions are inserted explicitly.
+create table instagram_archive.account_permission_observations (
+    observation_id   uuid        primary key,
+    account_id       uuid        not null,
+    generation_id    uuid        not null,
+    permission_name  text        not null,
+    permission_status text       not null,
+    raw_record_id    uuid        not null,
+    observed_at      timestamptz not null,
+    constraint account_permission_observations_generation_permission_key
+        unique (account_id, generation_id, permission_name),
+    constraint account_permission_observations_account_id_fkey foreign key (account_id)
+        references instagram_archive.accounts (account_id),
+    constraint account_permission_observations_raw_record_id_fkey foreign key (raw_record_id)
+        references instagram_archive.raw_records (raw_record_id),
+    constraint account_permission_observations_status_check
+        check (permission_status in ('granted', 'declined', 'expired', 'absent', 'unknown'))
+);
+
+-- A total closed matrix for the latest generation of one account.
+create table instagram_archive.account_capabilities (
+    account_id       uuid        not null,
+    generation_id    uuid        not null,
+    capability       text        not null,
+    capability_state text        not null,
+    reason            text        not null,
+    observed_at       timestamptz not null,
+    constraint account_capabilities_pkey primary key (account_id, capability),
+    constraint account_capabilities_account_id_fkey foreign key (account_id)
+        references instagram_archive.accounts (account_id),
+    constraint account_capabilities_capability_check check (capability in
+        ('account_identity_read', 'own_media_read', 'content_publish', 'comment_management',
+         'message_management', 'native_saved_read')),
+    constraint account_capabilities_state_check
+        check (capability_state in ('available', 'unavailable', 'not_supported')),
+    constraint account_capabilities_reason_check check (reason in
+        ('granted', 'account_type_unsupported', 'permission_declined', 'permission_expired',
+         'permission_absent', 'permission_unknown', 'missing_permission',
+         'write_consent_required', 'provider_not_supported', 'revoked',
+         'reauthorization_required'))
+);
+
+-- Redacted append-only lifecycle evidence. detail may contain only closed operational facts.
+create table instagram_archive.account_credential_audit (
+    audit_id     uuid        primary key,
+    account_id   uuid        not null,
+    change_kind  text        not null,
+    outcome      text        not null,
+    detail       jsonb       not null default '{}',
+    occurred_at  timestamptz not null,
+    constraint account_credential_audit_account_id_fkey foreign key (account_id)
+        references instagram_archive.accounts (account_id),
+    constraint account_credential_audit_change_kind_check check (change_kind in
+        ('authorized', 'refreshed', 'reauthorization_required', 'revoked')),
+    constraint account_credential_audit_outcome_check check (outcome in
+        ('succeeded', 'provider_failed', 'provider_unsupported', 'authentication_failed'))
+);
+
+-- One committed reservation per provider HTTP attempt. It deliberately stores no URL or payload.
+create table instagram_archive.provider_api_usage (
+    usage_id           uuid        primary key,
+    operation_id       uuid        not null,
+    account_id         uuid,
+    request_class      text        not null,
+    attempt_ordinal    integer     not null,
+    state              text        not null,
+    outcome            text,
+    http_status        smallint,
+    call_count_percent smallint,
+    cpu_time_percent   smallint,
+    total_time_percent smallint,
+    started_at         timestamptz not null,
+    finished_at        timestamptz,
+    constraint provider_api_usage_operation_ordinal_key unique (operation_id, attempt_ordinal),
+    constraint provider_api_usage_account_id_fkey foreign key (account_id)
+        references instagram_archive.accounts (account_id),
+    constraint provider_api_usage_attempt_ordinal_check check (attempt_ordinal > 0),
+    constraint provider_api_usage_request_class_check check (request_class in
+        ('code_exchange', 'account_discovery', 'permission_discovery', 'token_refresh',
+         'token_revoke')),
+    constraint provider_api_usage_state_check check (state in ('started', 'completed')),
+    constraint provider_api_usage_outcome_check check (outcome is null or outcome in
+        ('succeeded', 'authentication', 'validation', 'rate_limited', 'server', 'network',
+         'response_refused', 'provider_unsupported')),
+    constraint provider_api_usage_terminal_check check (
+        (state = 'started' and outcome is null and finished_at is null)
+        or (state = 'completed' and outcome is not null and finished_at is not null)
+    ),
+    constraint provider_api_usage_call_count_percent_check
+        check (call_count_percent between 0 and 100),
+    constraint provider_api_usage_cpu_time_percent_check
+        check (cpu_time_percent between 0 and 100),
+    constraint provider_api_usage_total_time_percent_check
+        check (total_time_percent between 0 and 100)
+);
 
 -- ---------------------------------------------------------------------------------------------
 -- profiles

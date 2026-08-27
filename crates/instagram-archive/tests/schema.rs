@@ -11,9 +11,14 @@ use ratatoskr_instagram_archive::Database;
 use ratatoskr_instagram_archive::test_support::{TestDatabase, admin_url};
 
 /// The relations README.md's planned data model declares, no more, no fewer.
-const DECLARED_TABLES: [&str; 16] = [
+const DECLARED_TABLES: [&str; 21] = [
     "accounts",
+    "account_capabilities",
+    "account_credential_audit",
+    "account_permission_observations",
     "credentials",
+    "oauth_flows",
+    "provider_api_usage",
     "profiles",
     "media",
     "media_relations",
@@ -29,6 +34,93 @@ const DECLARED_TABLES: [&str; 16] = [
     "outbox_events",
     "inbox_events",
 ];
+
+#[tokio::test]
+async fn official_oauth_tables_match_the_current_schema() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let tables = archive_tables(test.database.pool()).await;
+    for required in [
+        "oauth_flows",
+        "account_permission_observations",
+        "account_capabilities",
+        "account_credential_audit",
+        "provider_api_usage",
+    ] {
+        assert!(
+            tables.iter().any(|table| table == required),
+            "official OAuth table {required} must exist"
+        );
+    }
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
+async fn credentials_are_unique_per_account() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+    let account_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into instagram_archive.accounts
+         (account_id, user_ref, provider_account_id, username, account_type,
+          connection_status, scopes, connected_at)
+         values ($1, $2, 'provider-account', 'redacted', 'business', 'connected',
+                 array['instagram_business_basic'], now())",
+    )
+    .bind(account_id)
+    .bind(Uuid::now_v7())
+    .execute(pool)
+    .await
+    .expect("account inserts");
+    let insert = "insert into instagram_archive.credentials
+         (credential_id, account_id, access_token_envelope, key_version,
+          granted_permissions, expires_at)
+         values ($1, $2, $3, 1, array['instagram_business_basic'], now())";
+    sqlx::query(insert)
+        .bind(Uuid::now_v7())
+        .bind(account_id)
+        .bind(vec![1_u8; 32])
+        .execute(pool)
+        .await
+        .expect("first credential inserts");
+    let duplicate = sqlx::query(insert)
+        .bind(Uuid::now_v7())
+        .bind(account_id)
+        .bind(vec![2_u8; 32])
+        .execute(pool)
+        .await;
+    assert!(
+        duplicate.is_err(),
+        "a second active credential for one account must be refused"
+    );
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
+async fn usage_rows_carry_no_request_payload_columns() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let forbidden: Vec<String> = sqlx::query_scalar(
+        "select column_name from information_schema.columns
+         where table_schema = 'instagram_archive' and table_name = 'provider_api_usage'
+           and column_name = any(array['url', 'request_url', 'request_body', 'response_body',
+                                       'headers', 'token', 'authorization_code'])",
+    )
+    .fetch_all(test.database.pool())
+    .await
+    .expect("the catalog query answers");
+    assert!(
+        forbidden.is_empty(),
+        "usage ledger leaks request data: {forbidden:?}"
+    );
+    let columns: i64 = sqlx::query_scalar(
+        "select count(*) from information_schema.columns
+         where table_schema = 'instagram_archive' and table_name = 'provider_api_usage'",
+    )
+    .fetch_one(test.database.pool())
+    .await
+    .expect("the catalog query answers");
+    assert!(columns > 0, "provider_api_usage must exist");
+    test.cleanup().await.expect("cleanup must drop");
+}
 
 const INSERT_CAPTURE: &str = "insert into instagram_archive.captures \
      (capture_id, user_ref, canonical_url, acquisition_method, saved_authority, \
@@ -363,7 +455,7 @@ async fn harness_databases_are_isolated_and_cleanup_drops_them() {
     const INSERT_ACCOUNT: &str = "insert into instagram_archive.accounts \
          (account_id, user_ref, provider_account_id, username, account_type, \
           connection_status, scopes, connected_at) \
-         values ($1, $1, $2, 'who', 'business', 'connected', '', now())";
+         values ($1, $1, $2, 'who', 'business', 'connected', '{}', now())";
 
     let one = TestDatabase::create().await.expect("database one");
     let two = TestDatabase::create().await.expect("database two");

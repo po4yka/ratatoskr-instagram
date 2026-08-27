@@ -8,6 +8,16 @@ use sqlx::Executor as _;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use uuid::Uuid;
 
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::{Arc, Mutex};
+
+use secrecy::SecretString;
+
+use crate::provider::{
+    ExchangedToken, InstagramProvider, OAuthCodeRelay, ProviderAccount, ProviderError,
+    ProviderFailureClass, ProviderFuture, ProviderPermissions, RelayClaim, RelayError, RelayFuture,
+};
+
 use crate::{Database, PersistenceError};
 
 /// How many connections one test may hold. The suite runs several test
@@ -136,5 +146,146 @@ impl TestDatabase {
             .map_err(PersistenceError::Query)?;
         admin.close().await;
         Ok(())
+    }
+}
+
+/// One scripted result consumed by [`FakeInstagramProvider`].
+#[derive(Debug)]
+pub enum FakeProviderStep {
+    /// Authorization-code exchange result.
+    Exchange(Result<ExchangedToken, ProviderError>),
+    /// Account-discovery result.
+    Account(Result<ProviderAccount, ProviderError>),
+    /// Permission-discovery result.
+    Permissions(Result<ProviderPermissions, ProviderError>),
+    /// Refresh result.
+    Refresh(Result<ExchangedToken, ProviderError>),
+    /// Provider-side revoke result.
+    Revoke(Result<(), ProviderError>),
+}
+
+/// Deterministic no-network official provider.
+#[derive(Debug, Clone)]
+pub struct FakeInstagramProvider {
+    steps: Arc<Mutex<VecDeque<FakeProviderStep>>>,
+}
+
+impl FakeInstagramProvider {
+    /// Creates a fake that consumes exactly the supplied order.
+    #[must_use]
+    pub fn new(steps: impl IntoIterator<Item = FakeProviderStep>) -> Self {
+        Self {
+            steps: Arc::new(Mutex::new(steps.into_iter().collect())),
+        }
+    }
+
+    fn next(&self) -> Result<FakeProviderStep, ProviderError> {
+        self.steps
+            .lock()
+            .map_err(|_| fake_provider_error())?
+            .pop_front()
+            .ok_or_else(fake_provider_error)
+    }
+
+    /// Number of scripted calls not yet consumed.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.steps.lock().map_or(usize::MAX, |steps| steps.len())
+    }
+}
+
+impl InstagramProvider for FakeInstagramProvider {
+    fn exchange_code<'a>(&'a self, _code: &'a SecretString) -> ProviderFuture<'a, ExchangedToken> {
+        Box::pin(async move {
+            match self.next()? {
+                FakeProviderStep::Exchange(result) => result,
+                _ => Err(fake_provider_error()),
+            }
+        })
+    }
+
+    fn discover_account<'a>(
+        &'a self,
+        _access_token: &'a SecretString,
+    ) -> ProviderFuture<'a, ProviderAccount> {
+        Box::pin(async move {
+            match self.next()? {
+                FakeProviderStep::Account(result) => result,
+                _ => Err(fake_provider_error()),
+            }
+        })
+    }
+
+    fn discover_permissions<'a>(
+        &'a self,
+        _access_token: &'a SecretString,
+    ) -> ProviderFuture<'a, ProviderPermissions> {
+        Box::pin(async move {
+            match self.next()? {
+                FakeProviderStep::Permissions(result) => result,
+                _ => Err(fake_provider_error()),
+            }
+        })
+    }
+
+    fn refresh_token<'a>(
+        &'a self,
+        _access_token: &'a SecretString,
+    ) -> ProviderFuture<'a, ExchangedToken> {
+        Box::pin(async move {
+            match self.next()? {
+                FakeProviderStep::Refresh(result) => result,
+                _ => Err(fake_provider_error()),
+            }
+        })
+    }
+
+    fn revoke_token<'a>(&'a self, _access_token: &'a SecretString) -> ProviderFuture<'a, ()> {
+        Box::pin(async move {
+            match self.next()? {
+                FakeProviderStep::Revoke(result) => result,
+                _ => Err(fake_provider_error()),
+            }
+        })
+    }
+}
+
+fn fake_provider_error() -> ProviderError {
+    ProviderError {
+        class: ProviderFailureClass::ResponseRefused,
+        http_status: None,
+    }
+}
+
+/// Deterministic one-time callback relay.
+#[derive(Debug, Clone, Default)]
+pub struct FakeOAuthCodeRelay {
+    claims: Arc<Mutex<BTreeMap<String, RelayClaim>>>,
+}
+
+impl FakeOAuthCodeRelay {
+    /// Adds a single-use relay claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayError::Transport`] if the test script lock is poisoned.
+    pub fn insert(&self, relay_id: String, claim: RelayClaim) -> Result<(), RelayError> {
+        self.claims
+            .lock()
+            .map_err(|_| RelayError::Transport)?
+            .insert(relay_id, claim);
+        Ok(())
+    }
+}
+
+impl OAuthCodeRelay for FakeOAuthCodeRelay {
+    fn claim<'a>(&'a self, relay_id: &'a str) -> RelayFuture<'a> {
+        Box::pin(async move {
+            self.claims
+                .lock()
+                .map_err(|_| RelayError::Transport)?
+                .remove(relay_id)
+                .ok_or(RelayError::Unavailable)
+        })
     }
 }

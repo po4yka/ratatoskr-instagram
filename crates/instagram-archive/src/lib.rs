@@ -9,19 +9,31 @@
 //! implemented; account connection and Data Export imports arrive with later
 //! implementation plan items.
 
+/// Official-account refresh, downgrade, and revoke persistence.
+pub mod account;
 /// Knowledge completion intake and local capture-result linkage.
 pub mod analysis_linkage;
 /// The capability matrix: acquisition modes, support status, authority
 /// ceilings, and the upstream-versus-preservation boundary.
 pub mod capability;
+/// Total reconciliation of provider observations into per-account capabilities.
+pub mod capability_reconciliation;
 /// Explicit capture intake: submission identity, provenance, and the
 /// unavailable fallback.
 pub mod capture;
 pub mod config;
+/// Authenticated encryption for provider credential material.
+pub mod credentials;
 /// The owned `PostgreSQL` pool and the embedded `instagram_archive` schema.
 pub mod database;
+/// Owner-bound OAuth begin and callback completion.
+pub mod oauth;
 /// Canonicalization of client-delivered Instagram URLs into stable permalinks.
 pub mod permalink;
+/// Official Meta Instagram Login adapter contract.
+pub mod provider;
+/// Durable pre-I/O accounting for official provider calls.
+pub mod provider_budget;
 /// Social-source publishing: snapshot construction, transactional outbox
 /// appends, and the at-least-once publisher loop over a transport seam.
 pub mod publishing;
@@ -40,7 +52,8 @@ pub use capability::{
     retention_after_observation,
 };
 pub use config::{
-    AdminConfig, Config, ConfigError, Limits, PublisherConfig, StorageConfig, TelemetryConfig,
+    AdminConfig, Config, ConfigError, Limits, OAuthConfig, PublisherConfig, StorageConfig,
+    TelemetryConfig,
 };
 pub use database::{Database, PersistenceError};
 pub use permalink::{CanonicalPermalink, PermalinkError, PermalinkKind};

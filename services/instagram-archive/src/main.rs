@@ -18,10 +18,13 @@ use std::time::Duration;
 
 use secrecy::ExposeSecret as _;
 
+use ratatoskr_instagram_archive::provider::{
+    REFRESH_SUPPORTED, ReqwestInstagramProvider, ReqwestOAuthCodeRelay,
+};
 use ratatoskr_instagram_archive::publishing::TransportError;
 use ratatoskr_instagram_archive::telemetry::SERVICE_NAME;
 use ratatoskr_instagram_archive::{Config, Database, PublisherConfig};
-use ratatoskr_instagram_archive_service::RuntimeState;
+use ratatoskr_instagram_archive_service::{OfficialAccountRuntime, RuntimeState};
 use uuid::Uuid;
 
 /// How often the prober copies the database answer into the readiness facts.
@@ -59,6 +62,10 @@ fn check_config() -> ExitCode {
 }
 
 #[tokio::main]
+#[allow(
+    clippy::too_many_lines,
+    reason = "startup order is a security and readiness invariant kept linear for auditability"
+)]
 async fn tokio_main() -> Result<(), ExitCode> {
     let config = match Config::load() {
         Ok(config) => config,
@@ -105,6 +112,17 @@ async fn tokio_main() -> Result<(), ExitCode> {
         tracing::error!(%error, "the schema could not be applied");
         ExitCode::FAILURE
     })?;
+    database
+        .scrub_stranded_revocations(time::OffsetDateTime::now_utc())
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "stranded account revocations could not be scrubbed");
+            ExitCode::FAILURE
+        })?;
+    let official_accounts = build_official_runtime(&config).map_err(|error| {
+        tracing::error!(error_class = "official_oauth_runtime", %error, "official OAuth runtime could not be built");
+        ExitCode::from(78)
+    })?;
 
     let runtime = Arc::new(RuntimeState::new());
     let admin_listener = tokio::net::TcpListener::bind(config.admin.listen_address)
@@ -150,7 +168,12 @@ async fn tokio_main() -> Result<(), ExitCode> {
             move || metrics_handle.render(),
             shutdown_bound,
         ),
-        serve_product(api_listener, database.clone(), shutdown_bound),
+        serve_product(
+            api_listener,
+            database.clone(),
+            official_accounts,
+            shutdown_bound,
+        ),
     );
     prober.abort();
     publisher.abort();
@@ -229,10 +252,81 @@ async fn serve_admin(
 async fn serve_product(
     listener: tokio::net::TcpListener,
     database: Database,
+    official_accounts: Option<OfficialAccountRuntime>,
     shutdown_timeout: Duration,
 ) -> Result<(), String> {
-    let router = ratatoskr_instagram_archive_service::product_router(database);
+    let router = ratatoskr_instagram_archive_service::product_router_with_official_accounts(
+        database,
+        official_accounts,
+    );
     serve_plane("product", listener, router, || (), shutdown_timeout).await
+}
+
+fn build_official_runtime(config: &Config) -> Result<Option<OfficialAccountRuntime>, String> {
+    if !config.oauth.enabled {
+        return Ok(None);
+    }
+    let keyring = config
+        .oauth
+        .credential_keyring()
+        .map_err(|_| "credential keyring is invalid".to_owned())?
+        .ok_or_else(|| "credential keyring is absent".to_owned())?;
+    let client_id = config
+        .oauth
+        .client_id
+        .clone()
+        .ok_or_else(|| "client id is absent".to_owned())?;
+    let client_secret = config
+        .oauth
+        .client_secret
+        .clone()
+        .ok_or_else(|| "client secret is absent".to_owned())?;
+    let redirect_uri = config
+        .oauth
+        .redirect_uri
+        .clone()
+        .ok_or_else(|| "redirect URI is absent".to_owned())?;
+    let relay_url = config
+        .oauth
+        .platform_relay_url
+        .as_deref()
+        .ok_or_else(|| "relay URL is absent".to_owned())?
+        .parse::<reqwest::Url>()
+        .map_err(|_| "relay URL is invalid".to_owned())?;
+    let relay_token = config
+        .oauth
+        .platform_relay_token
+        .clone()
+        .ok_or_else(|| "relay token is absent".to_owned())?;
+    let request_timeout = Duration::from_millis(config.oauth.request_timeout_ms);
+    let provider = ReqwestInstagramProvider::new(
+        client_id.clone(),
+        client_secret,
+        redirect_uri.clone(),
+        Duration::from_millis(config.oauth.connect_timeout_ms),
+        request_timeout,
+        config.oauth.max_response_bytes,
+    )
+    .map_err(|_| "provider client could not be built".to_owned())?;
+    let relay = ReqwestOAuthCodeRelay::new(
+        relay_url,
+        relay_token,
+        request_timeout,
+        config.oauth.max_response_bytes,
+    )
+    .map_err(|_| "relay client could not be built".to_owned())?;
+    Ok(Some(OfficialAccountRuntime::new(
+        keyring,
+        Arc::new(provider),
+        Arc::new(relay),
+        client_id,
+        redirect_uri,
+        Duration::from_secs(config.oauth.flow_ttl_seconds),
+        config.oauth.call_budget,
+        config.oauth.discovery_retries,
+        false,
+        REFRESH_SUPPORTED,
+    )))
 }
 
 /// Copies the database answer into readiness forever.

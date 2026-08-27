@@ -126,3 +126,94 @@ fn debug_rendering_of_storage_redacts_the_database_url() {
         "the secret leaked into Debug: {rendered}"
     );
 }
+
+fn complete_oauth_environment() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("RATATOSKR__OAUTH__ENABLED", "true"),
+        ("RATATOSKR__OAUTH__CLIENT_ID", "123456789"),
+        ("RATATOSKR__OAUTH__CLIENT_SECRET", "synthetic-client-secret"),
+        (
+            "RATATOSKR__OAUTH__REDIRECT_URI",
+            "https://platform.example.test/v1/oauth/callback/instagram",
+        ),
+        (
+            "RATATOSKR__OAUTH__PLATFORM_RELAY_URL",
+            "https://platform.example.test/v1/oauth/relay",
+        ),
+        (
+            "RATATOSKR__OAUTH__PLATFORM_RELAY_TOKEN",
+            "synthetic-relay-token",
+        ),
+        ("RATATOSKR__OAUTH__GRAPH_VERSION", "v26.0"),
+        ("RATATOSKR__OAUTH__CURRENT_KEY_VERSION", "7"),
+        (
+            "RATATOSKR__OAUTH__KEYRING",
+            "7:QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+        ),
+    ]
+}
+
+#[test]
+fn oauth_disabled_accepts_missing_secrets() {
+    let config = Config::from_environment([("RATATOSKR__OAUTH__ENABLED", "false")])
+        .expect("disabled OAuth needs no provider credentials");
+    assert!(!config.oauth.enabled);
+    assert!(config.oauth.client_secret.is_none());
+    assert!(config.oauth.keyring.is_none());
+}
+
+#[test]
+fn oauth_enabled_requires_complete_bounded_configuration() {
+    let error = Config::from_environment([("RATATOSKR__OAUTH__ENABLED", "true")])
+        .expect_err("enabled OAuth must fail closed without every secret and binding");
+    assert!(error.to_string().contains("OAUTH"), "{error}");
+
+    let mut excessive = complete_oauth_environment();
+    excessive.push(("RATATOSKR__OAUTH__CALL_BUDGET", "999999"));
+    assert!(Config::from_environment(excessive).is_err());
+}
+
+#[test]
+fn oauth_keyring_rejects_invalid_or_missing_current_version_without_echo() {
+    for keyring in [
+        "7:not-base64",
+        "8:QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+    ] {
+        let mut entries = complete_oauth_environment();
+        if let Some((_, value)) = entries
+            .iter_mut()
+            .find(|(key, _)| *key == "RATATOSKR__OAUTH__KEYRING")
+        {
+            *value = keyring;
+        }
+        let error = Config::from_environment(entries).expect_err("invalid keyring is refused");
+        let rendered = error.to_string();
+        assert!(rendered.contains("KEYRING") || rendered.contains("CURRENT_KEY_VERSION"));
+        assert!(
+            !rendered.contains(keyring),
+            "key material leaked: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn oauth_effective_config_omits_all_secret_fields() {
+    let config = Config::from_environment(complete_oauth_environment())
+        .expect("complete synthetic OAuth config loads");
+    let serialized = serde_json::to_string(&config).expect("effective config serializes");
+    for secret in [
+        "synthetic-client-secret",
+        "synthetic-relay-token",
+        "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+    ] {
+        assert!(!serialized.contains(secret), "secret leaked: {serialized}");
+    }
+}
+
+#[test]
+fn production_provider_hosts_cannot_be_overridden() {
+    let mut entries = complete_oauth_environment();
+    entries.push(("RATATOSKR__OAUTH__PROVIDER_BASE_URL", "http://127.0.0.1:9"));
+    let error = Config::from_environment(entries).expect_err("production hosts stay fixed");
+    assert!(error.to_string().contains("PROVIDER_BASE_URL"));
+}

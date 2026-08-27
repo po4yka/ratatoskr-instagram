@@ -1,13 +1,13 @@
 # Developing Ratatoskr Instagram
 
 > Status: Active development
-> Last reviewed: 2026-08-25
+> Last reviewed: 2026-08-27
 
-Implementation plan items 1–4 are implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `instagram_archive` schema applied at startup; plus the explicit capture intake — permalink canonicalization, idempotent capture identity on `(user_ref, canonical_url)`, the unavailable fallback record, and `POST /v1/captures` on a second loopback listener; plus supported public resolution — an approved embed/oEmbed-style surface seam (recorded fixtures in tests), immutable parser-versioned revisions over content-addressed raw payloads, deterministic normalization into `media`, and verbatim failure observations. The production network client behind the seam arrives with provider credentials; account OAuth, Data Export import, and eventing are not implemented yet.
+Implementation plan items 1–6 are implemented. The official account lane is disabled by default and uses the fixed Instagram Login provider profile with Graph `v26.0`, exactly `instagram_business_basic`, owner-bound Platform relay claims, AES-256-GCM token envelopes, refresh, local revoke scrubbing, capability discovery/reconciliation, and durable finite provider-call accounting. Own-media synchronization remains item 7; Data Export import and eventing are not implemented yet.
 
 ## Intended toolchain
 
-Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, tracing, Prometheus. Planned for later items: Reqwest/Rustls, OAuth, safe archive import, BlobStore, NATS, provider fixtures/WireMock, testcontainers.
+Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, tracing, Prometheus, Reqwest/Rustls, and AES-256-GCM. Planned for later items: safe archive import, BlobStore, NATS, WireMock, and testcontainers.
 
 ## Code size limits
 
@@ -59,6 +59,19 @@ required to start; `<binary> check-config` validates configuration without bindi
 invalid). Both listeners bind loopback only; the product plane trusts its caller to name the acting
 `user_ref` because user authentication lives in `ratatoskr-platform`, so opening it beyond loopback
 is a deployment decision to make together with that boundary moving.
+
+Official OAuth stays off unless `RATATOSKR__OAUTH__ENABLED=true`. Enabling it requires all of:
+
+- client ID/secret, the exact HTTPS redirect URI, and Graph version `v26.0`;
+- the HTTPS Platform relay claim URL and its service bearer token;
+- `CURRENT_KEY_VERSION` plus `KEYRING`, encoded as comma-separated `version:base64-32-byte-key` entries;
+- bounded connect/request/total timeouts, response size, discovery retries, call budget, and flow TTL.
+
+All use the `RATATOSKR__OAUTH__` prefix shown by the config parser. Effective configuration and errors
+redact client secret, relay token, and key material. A separate Platform change must register the
+Instagram provider/callback and relay grant before operators enable this flag. Key retirement is an
+operator retention decision: keep every version needed to decrypt a live row; this item does not add
+a bulk re-encryption tool.
 
 ## Workflow
 

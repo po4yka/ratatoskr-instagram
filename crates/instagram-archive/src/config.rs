@@ -2,10 +2,14 @@
 //! returns defaults. The strictness tests must fail against this, and the
 //! real implementation replaces it without changing the public surface.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use secrecy::SecretString;
+use base64::Engine as _;
+use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
+
+use crate::credentials::crypto::{CredentialKeyring, KEY_LEN};
 
 const ENV_PREFIX: &str = "RATATOSKR__";
 
@@ -24,6 +28,72 @@ pub struct Config {
     pub limits: Limits,
     /// Outbox publisher loop configuration.
     pub publisher: PublisherConfig,
+    /// Disabled-by-default official Instagram OAuth configuration.
+    pub oauth: OAuthConfig,
+}
+
+/// Official Instagram Login configuration.
+#[derive(Clone, Serialize)]
+pub struct OAuthConfig {
+    /// Whether OAuth command routes are enabled.
+    pub enabled: bool,
+    /// Meta Instagram application id.
+    pub client_id: Option<String>,
+    /// Meta Instagram application secret.
+    #[serde(skip_serializing)]
+    pub client_secret: Option<SecretString>,
+    /// Platform-owned public callback URI.
+    pub redirect_uri: Option<String>,
+    /// Loopback Platform code-relay base URI.
+    pub platform_relay_url: Option<String>,
+    /// Narrow audience-bound relay credential.
+    #[serde(skip_serializing)]
+    pub platform_relay_token: Option<SecretString>,
+    /// Explicit Graph API path version.
+    pub graph_version: String,
+    /// Key version selected for new envelopes.
+    pub current_key_version: Option<u32>,
+    /// Versioned base64 AES-256 keys.
+    #[serde(skip_serializing)]
+    pub keyring: Option<SecretString>,
+    /// TCP/TLS connection timeout.
+    pub connect_timeout_ms: u64,
+    /// Per-request read timeout.
+    pub request_timeout_ms: u64,
+    /// End-to-end provider operation deadline.
+    pub total_timeout_ms: u64,
+    /// Largest accepted provider JSON body.
+    pub max_response_bytes: usize,
+    /// Additional discovery attempts after the first.
+    pub discovery_retries: u32,
+    /// Maximum provider attempts in one operation.
+    pub call_budget: u32,
+    /// Pending flow lifetime.
+    pub flow_ttl_seconds: u64,
+}
+
+impl std::fmt::Debug for OAuthConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OAuthConfig")
+            .field("enabled", &self.enabled)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("platform_relay_url", &self.platform_relay_url)
+            .field("platform_relay_token", &"[REDACTED]")
+            .field("graph_version", &self.graph_version)
+            .field("current_key_version", &self.current_key_version)
+            .field("keyring", &"[REDACTED]")
+            .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .field("request_timeout_ms", &self.request_timeout_ms)
+            .field("total_timeout_ms", &self.total_timeout_ms)
+            .field("max_response_bytes", &self.max_response_bytes)
+            .field("discovery_retries", &self.discovery_retries)
+            .field("call_budget", &self.call_budget)
+            .field("flow_ttl_seconds", &self.flow_ttl_seconds)
+            .finish()
+    }
 }
 
 /// Loopback-only operator listener configuration.
@@ -179,6 +249,7 @@ impl Config {
             }
             apply_entry(&mut config, key, value.as_ref(), &mut violations);
         }
+        validate_oauth(&config.oauth, &mut violations);
 
         if violations.is_empty() {
             Ok(config)
@@ -188,6 +259,231 @@ impl Config {
     }
 }
 
+impl OAuthConfig {
+    /// Decodes the validated keyring for credential encryption.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] if called on an invalid enabled configuration.
+    pub fn credential_keyring(&self) -> Result<Option<CredentialKeyring>, ConfigError> {
+        if !self.enabled {
+            return Ok(None);
+        }
+        let current = self.current_key_version.ok_or_else(|| {
+            ConfigError::new(
+                "RATATOSKR__OAUTH__CURRENT_KEY_VERSION",
+                "must name a key present in the OAuth keyring",
+            )
+        })?;
+        let encoded = self.keyring.as_ref().ok_or_else(|| {
+            ConfigError::new(
+                "RATATOSKR__OAUTH__KEYRING",
+                "must contain versioned base64 AES-256 keys",
+            )
+        })?;
+        let keys = decode_keyring(encoded.expose_secret())
+            .map_err(|rule| ConfigError::new("RATATOSKR__OAUTH__KEYRING", rule))?;
+        CredentialKeyring::new(current, keys)
+            .map(Some)
+            .map_err(|_| {
+                ConfigError::new(
+                    "RATATOSKR__OAUTH__CURRENT_KEY_VERSION",
+                    "must name a key present in the OAuth keyring",
+                )
+            })
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one closed configuration section reports every independent violation in one pass"
+)]
+fn validate_oauth(config: &OAuthConfig, violations: &mut Vec<Violation>) {
+    if !config.enabled {
+        return;
+    }
+    let mut require = |present: bool, key: &'static str, rule: &'static str| {
+        if !present {
+            violations.push(Violation {
+                key: key.to_owned(),
+                rule,
+            });
+        }
+    };
+    require(
+        config
+            .client_id
+            .as_deref()
+            .is_some_and(|value| !value.is_empty() && value.len() <= 128 && value.is_ascii()),
+        "RATATOSKR__OAUTH__CLIENT_ID",
+        "must be non-empty bounded ASCII text",
+    );
+    require(
+        config.client_secret.is_some(),
+        "RATATOSKR__OAUTH__CLIENT_SECRET",
+        "is required when OAuth is enabled",
+    );
+    require(
+        config.platform_relay_token.is_some(),
+        "RATATOSKR__OAUTH__PLATFORM_RELAY_TOKEN",
+        "is required when OAuth is enabled",
+    );
+    require(
+        config.current_key_version.is_some(),
+        "RATATOSKR__OAUTH__CURRENT_KEY_VERSION",
+        "is required when OAuth is enabled",
+    );
+    require(
+        config.keyring.is_some(),
+        "RATATOSKR__OAUTH__KEYRING",
+        "is required when OAuth is enabled",
+    );
+
+    validate_https_uri(
+        config.redirect_uri.as_deref(),
+        "RATATOSKR__OAUTH__REDIRECT_URI",
+        violations,
+    );
+    validate_https_uri(
+        config.platform_relay_url.as_deref(),
+        "RATATOSKR__OAUTH__PLATFORM_RELAY_URL",
+        violations,
+    );
+    if config.graph_version != "v26.0" {
+        violations.push(Violation {
+            key: "RATATOSKR__OAUTH__GRAPH_VERSION".to_owned(),
+            rule: "must equal the reviewed provider profile version v26.0",
+        });
+    }
+    if let (Some(current), Some(encoded)) = (config.current_key_version, config.keyring.as_ref()) {
+        match decode_keyring(encoded.expose_secret()) {
+            Ok(keys) if keys.contains_key(&current) => {}
+            Ok(_) => violations.push(Violation {
+                key: "RATATOSKR__OAUTH__CURRENT_KEY_VERSION".to_owned(),
+                rule: "must name a key present in the OAuth keyring",
+            }),
+            Err(rule) => violations.push(Violation {
+                key: "RATATOSKR__OAUTH__KEYRING".to_owned(),
+                rule,
+            }),
+        }
+    }
+    validate_range(
+        config.connect_timeout_ms,
+        100,
+        10_000,
+        "RATATOSKR__OAUTH__CONNECT_TIMEOUT_MS",
+        violations,
+    );
+    validate_range(
+        config.request_timeout_ms,
+        100,
+        30_000,
+        "RATATOSKR__OAUTH__REQUEST_TIMEOUT_MS",
+        violations,
+    );
+    validate_range(
+        config.total_timeout_ms,
+        config.request_timeout_ms,
+        60_000,
+        "RATATOSKR__OAUTH__TOTAL_TIMEOUT_MS",
+        violations,
+    );
+    validate_range(
+        config.max_response_bytes as u64,
+        1_024,
+        1_048_576,
+        "RATATOSKR__OAUTH__MAX_RESPONSE_BYTES",
+        violations,
+    );
+    validate_range(
+        u64::from(config.discovery_retries),
+        0,
+        2,
+        "RATATOSKR__OAUTH__DISCOVERY_RETRIES",
+        violations,
+    );
+    validate_range(
+        u64::from(config.call_budget),
+        3,
+        10,
+        "RATATOSKR__OAUTH__CALL_BUDGET",
+        violations,
+    );
+    validate_range(
+        config.flow_ttl_seconds,
+        60,
+        900,
+        "RATATOSKR__OAUTH__FLOW_TTL_SECONDS",
+        violations,
+    );
+}
+
+fn validate_https_uri(value: Option<&str>, key: &str, violations: &mut Vec<Violation>) {
+    let valid = value
+        .and_then(|value| reqwest::Url::parse(value).ok())
+        .is_some_and(|url| {
+            url.scheme() == "https"
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.fragment().is_none()
+        });
+    if !valid {
+        violations.push(Violation {
+            key: key.to_owned(),
+            rule: "must be an HTTPS URI without credentials or fragment",
+        });
+    }
+}
+
+fn validate_range(
+    value: u64,
+    minimum: u64,
+    maximum: u64,
+    key: &str,
+    violations: &mut Vec<Violation>,
+) {
+    if !(minimum..=maximum).contains(&value) {
+        violations.push(Violation {
+            key: key.to_owned(),
+            rule: "must be within its finite documented range",
+        });
+    }
+}
+
+fn decode_keyring(encoded: &str) -> Result<BTreeMap<u32, [u8; KEY_LEN]>, &'static str> {
+    if encoded.is_empty() {
+        return Err("must contain versioned base64 AES-256 keys");
+    }
+    let mut keys = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    for entry in encoded.split(',') {
+        let Some((version, encoded_key)) = entry.split_once(':') else {
+            return Err("must contain version:key entries");
+        };
+        let version = version
+            .parse::<u32>()
+            .ok()
+            .filter(|version| *version > 0)
+            .ok_or("must contain positive integer key versions")?;
+        if !seen.insert(version) {
+            return Err("must not repeat a key version");
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded_key)
+            .map_err(|_| "must contain valid base64 key material")?;
+        let key = <[u8; KEY_LEN]>::try_from(decoded)
+            .map_err(|_| "each decoded key must contain exactly 32 bytes")?;
+        keys.insert(version, key);
+    }
+    Ok(keys)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the strict environment-key inventory is intentionally one exhaustive match"
+)]
 fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec<Violation>) {
     let refused = |rule: &'static str| Violation {
         key: key.to_owned(),
@@ -245,6 +541,58 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
             Ok(parsed) => config.publisher.batch_size = parsed,
             Err(rule) => violations.push(refused(rule)),
         },
+        "RATATOSKR__OAUTH__ENABLED" => match value {
+            "true" => config.oauth.enabled = true,
+            "false" => config.oauth.enabled = false,
+            _ => violations.push(refused("must be true or false")),
+        },
+        "RATATOSKR__OAUTH__CLIENT_ID" => config.oauth.client_id = Some(value.to_owned()),
+        "RATATOSKR__OAUTH__CLIENT_SECRET" => {
+            config.oauth.client_secret = Some(SecretString::from(value));
+        }
+        "RATATOSKR__OAUTH__REDIRECT_URI" => config.oauth.redirect_uri = Some(value.to_owned()),
+        "RATATOSKR__OAUTH__PLATFORM_RELAY_URL" => {
+            config.oauth.platform_relay_url = Some(value.to_owned());
+        }
+        "RATATOSKR__OAUTH__PLATFORM_RELAY_TOKEN" => {
+            config.oauth.platform_relay_token = Some(SecretString::from(value));
+        }
+        "RATATOSKR__OAUTH__GRAPH_VERSION" => value.clone_into(&mut config.oauth.graph_version),
+        "RATATOSKR__OAUTH__CURRENT_KEY_VERSION" => match parse_positive::<u32>(value) {
+            Ok(parsed) => config.oauth.current_key_version = Some(parsed),
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__OAUTH__KEYRING" => {
+            config.oauth.keyring = Some(SecretString::from(value));
+        }
+        "RATATOSKR__OAUTH__CONNECT_TIMEOUT_MS" => match parse_positive::<u64>(value) {
+            Ok(parsed) => config.oauth.connect_timeout_ms = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__OAUTH__REQUEST_TIMEOUT_MS" => match parse_positive::<u64>(value) {
+            Ok(parsed) => config.oauth.request_timeout_ms = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__OAUTH__TOTAL_TIMEOUT_MS" => match parse_positive::<u64>(value) {
+            Ok(parsed) => config.oauth.total_timeout_ms = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__OAUTH__MAX_RESPONSE_BYTES" => match parse_positive::<usize>(value) {
+            Ok(parsed) => config.oauth.max_response_bytes = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__OAUTH__DISCOVERY_RETRIES" => match value.parse::<u32>() {
+            Ok(parsed) => config.oauth.discovery_retries = parsed,
+            Err(_) => violations.push(refused("must be a non-negative integer")),
+        },
+        "RATATOSKR__OAUTH__CALL_BUDGET" => match parse_positive::<u32>(value) {
+            Ok(parsed) => config.oauth.call_budget = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__OAUTH__FLOW_TTL_SECONDS" => match parse_positive::<u64>(value) {
+            Ok(parsed) => config.oauth.flow_ttl_seconds = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
         _ => violations.push(refused("is not recognized")),
     }
 }
@@ -283,6 +631,24 @@ impl Default for Config {
             publisher: PublisherConfig {
                 poll_interval_ms: 1_000,
                 batch_size: 16,
+            },
+            oauth: OAuthConfig {
+                enabled: false,
+                client_id: None,
+                client_secret: None,
+                redirect_uri: None,
+                platform_relay_url: None,
+                platform_relay_token: None,
+                graph_version: "v26.0".to_owned(),
+                current_key_version: None,
+                keyring: None,
+                connect_timeout_ms: 3_000,
+                request_timeout_ms: 10_000,
+                total_timeout_ms: 20_000,
+                max_response_bytes: 256 * 1024,
+                discovery_retries: 1,
+                call_budget: 5,
+                flow_ttl_seconds: 600,
             },
         }
     }

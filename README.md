@@ -2,7 +2,7 @@
 
 `ratatoskr-instagram` is the Instagram account and capture bounded context for Ratatoskr. It combines official account access where available with explicit user-initiated captures, public oEmbed resolution, and versioned Data Export imports.
 
-> **Status:** implementation plan items 1–4 are complete: a Rust service runs locally against PostgreSQL with typed strict configuration, structured telemetry, operator health routes (`/health/live`, `/health/ready`, `/metrics`, `/version`), typed errors, and the first-version `instagram_archive` schema applied at startup. Explicit capture intake is live: permalink canonicalization across delivered URL forms, idempotent capture identity on `(user_ref, canonical_url)`, truthful unavailable-fallback records, and a `POST /v1/captures` product plane on its own loopback listener (`127.0.0.1:9083` by default). Public resolution is live at the library level: permalinks resolve through the approved embed/oEmbed-style surface seam, every payload lands as an immutable parser-versioned revision before deterministic normalization into `instagram_archive.media`, and re-resolution appends history instead of overwriting it; the network client behind the seam arrives with provider credentials (plan item 6). Account connection, Data Export import, and events described below are planned and are not implemented yet.
+> **Status:** implementation plan items 1–6 are complete. In addition to explicit capture and public resolution, the disabled-by-default official account lane now implements Instagram API with Instagram Login for professional accounts: owner-bound OAuth relay completion, encrypted token storage, refresh, complete local revoke scrubbing, durable provider-call budgets, and post-connect reconciliation of the account type and actual granted permissions into a total capability matrix. Own-media synchronization remains plan item 7 and is not implemented; an available `own_media_read` capability records provider authority for that future operation, not synchronized data. Data Export import and events also remain planned.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -83,13 +83,18 @@ native_saved_state = Unknown
 
 This distinction is load-bearing. Absence from a future export or failed public resolution does not prove the user removed the item from Instagram or Ratatoskr. The full matrix of acquisition modes, support statuses, and authority ceilings lives in `docs/CAPABILITY_MATRIX.md`.
 
-## Planned data model
+## Data model
 
 The service owns an `instagram_archive.*` PostgreSQL schema. The first-version definition in `schema.sql` declares:
 
 ```text
 instagram_accounts
 instagram_credentials
+instagram_oauth_flows
+instagram_account_permission_observations
+instagram_account_capabilities
+instagram_account_credential_audit
+instagram_provider_api_usage
 instagram_profiles
 instagram_media
 instagram_media_relations
@@ -204,6 +209,27 @@ Provider credentials are owned only by this service. Requirements:
 - no tokens in events, logs, traces, or client responses.
 
 A connected professional account does not expand the authority of captures from unrelated public or private accounts.
+
+The implemented provider profile uses Graph `v26.0` and requests exactly the read-only
+`instagram_business_basic` permission. It discovers account type and permission status after connect
+and refresh; it never infers capabilities from the requested scope. Publishing, comment management,
+messaging, insights, native Saved access, and own-media reads are outside item 6.
+
+Tokens are AES-256-GCM envelopes with a versioned keyring, fresh nonce, and authenticated binding to
+the account/flow and token kind. Plaintext is never stored, logged, returned, or published. Revocation
+always removes local credentials and live owner flows and replaces capabilities with revoked state,
+even though this provider profile exposes no documented remote revoke operation.
+
+Every provider attempt is durably reserved before network I/O. Discovery retries are transient-only
+and consume another ordinal from the same finite operation budget. Usage records contain a closed
+request class/outcome and bounded numeric percentages only—never request URLs, payloads, headers, or
+tokens.
+
+The product listener exposes loopback commands under `/v1/accounts/instagram`: OAuth `begin` and
+`complete`, account `refresh`, `capabilities`, and `revoke`. Completion accepts a one-time Platform
+`relay_id`, never an authorization code. OAuth remains disabled by default. Enabling it also requires
+a separate Platform rollout that registers the Instagram callback/provider, grants the audience-bound
+relay claim, and routes the Meta callback; this repository does not supply that cross-service change.
 
 ## Linked content and analysis
 

@@ -6,7 +6,7 @@ The monolith resolved public embeds and took manual captures without a capabilit
 
 ## The matrix
 
-`ExplicitCapture` is implemented (plan item 3) and `PublicResolution` is implemented (plan item 4); both report `Supported`. The remaining lanes report `Planned`, and the matrix stays a commitment device: an implementation item must flip its own row's status with a reviewed test change before any code path can claim it.
+`ExplicitCapture` is implemented (plan item 3) and `PublicResolution` is implemented (plan item 4); both report `Supported`. Item 6 adds an official-account authorization projection but deliberately does not flip `OwnAccountSync`: the actual own-media operation remains item 7.
 
 | Mode | Status | Wire acquisition methods | Authority ceiling |
 |---|---|---|---|
@@ -21,6 +21,19 @@ The monolith resolved public embeds and took manual captures without a capabilit
 | Capability | Status | Reason |
 |---|---|---|
 | Native Saved-list synchronization (personal account) | NotSupported | no supported provider surface exposes the personal Saved list |
+
+## Connected-account capability projection
+
+Every discovery generation replaces all six rows for one account. Business and creator accounts gain
+`account_identity_read` and `own_media_read` only when `instagram_business_basic` is observed as
+granted. Personal and unknown accounts gain nothing. `native_saved_read` is always `not_supported`.
+Publishing, comment management, and messaging additionally require their exact granted permission
+and separate external-write consent; item 6 requests neither and records them unavailable.
+
+Closed reasons distinguish `granted`, unsupported account type, declined/expired/absent/unknown
+permission, missing write permission, missing write consent, provider non-support, revocation, and
+reauthorization required. The generation links to preserved raw permission evidence. Callers consume
+this projection and must never reinterpret the originally requested scope as a grant.
 
 Instagram provides Ratatoskr with no API that reads a personal account's native Saved list. No mode may synthesize that claim: an explicit capture proves the user saved the item to Ratatoskr at `captured_at`, an export proves it was saved at some point in the past, and neither proves current native membership. Deleting a Ratatoskr capture likewise never implies a native unsave.
 
