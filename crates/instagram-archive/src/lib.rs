@@ -28,14 +28,20 @@ pub mod config;
 pub mod credentials;
 /// Authenticated raw-first Data Export receipt and durable import evidence.
 pub mod data_export;
+/// Parser-version Data Export reprocessing and dry-run/apply plans.
+pub mod data_export_reprocessing;
 /// The owned `PostgreSQL` pool and the embedded `instagram_archive` schema.
 pub mod database;
+/// Provider-media retention policy, verified archival, and blob cleanup.
+pub mod media_retention;
 /// Owner-bound OAuth begin and callback completion.
 pub mod oauth;
 /// Capability-gated scheduled synchronization of connected-account own media.
 pub mod own_media;
 /// Canonicalization of client-delivered Instagram URLs into stable permalinks.
 pub mod permalink;
+/// Complete owner-data inventory and privacy-deletion classifications.
+pub mod privacy_deletion;
 /// Official Meta Instagram Login adapter contract.
 pub mod provider;
 /// Durable pre-I/O accounting for official provider calls.
@@ -43,6 +49,8 @@ pub mod provider_budget;
 /// Social-source publishing: snapshot construction, transactional outbox
 /// appends, and the at-least-once publisher loop over a transport seam.
 pub mod publishing;
+/// Finite recent-capture public re-resolution jobs and budget admission.
+pub mod re_resolution;
 /// Public resolution: the approved surface seam, immutable parser-versioned
 /// revisions of raw payloads, deterministic normalization, and truthful
 /// failure observations.

@@ -456,14 +456,40 @@ pub async fn append_removal_fact(
     .map_err(PublishError::Persistence)?;
     let permalink = crate::permalink::canonicalize(&canonical_url)
         .map_err(|_| PublishError::InvalidStoredPermalink(capture_id))?;
-    let source_uuid = source_identity(owner, &permalink.url).to_string();
+    append_source_removal_fact(
+        transaction,
+        owner,
+        source_identity(owner, &permalink.url),
+        "capture",
+        capture_id,
+        reason,
+        removed_at,
+    )
+    .await
+}
+
+/// Appends a canonical removal request for an already-derived social source.
+///
+/// This narrow internal boundary lets privacy deletion publish official-media
+/// removals after owner/source identity is established and before local rows
+/// are erased.
+pub(crate) async fn append_source_removal_fact(
+    transaction: &mut PgConnection,
+    owner: Uuid,
+    source_id: Uuid,
+    aggregate_type: &'static str,
+    aggregate_id: Uuid,
+    reason: RemovalReason,
+    removed_at: WireTimestamp,
+) -> Result<Uuid, PublishError> {
+    let source_uuid = source_id.to_string();
     let owner_value = owner.to_string();
     let payload = SocialSourceRemoved {
         social_source_id: parse_source_id(
-            Uuid::parse_str(&source_uuid).map_err(|error| text_violation(capture_id, error))?,
-            capture_id,
+            Uuid::parse_str(&source_uuid).map_err(|error| text_violation(aggregate_id, error))?,
+            aggregate_id,
         )?,
-        owner: owner_ref(owner, capture_id)?,
+        owner: owner_ref(owner, aggregate_id)?,
         reason,
         removed_at,
         extensions: Extensions::default(),
@@ -474,11 +500,12 @@ pub async fn append_removal_fact(
         "insert into instagram_archive.outbox_events \
          (event_id, event_type, aggregate_type, aggregate_id, payload, correlation_id, \
           causation_id, occurred_at) \
-         values ($1, $2, 'capture', $3, $4, $5, null, $6)",
+         values ($1, $2, $3, $4, $5, $6, null, $7)",
     )
     .bind(event_id)
     .bind(SocialSourceRemoved::EVENT_TYPE)
-    .bind(capture_id)
+    .bind(aggregate_type)
+    .bind(aggregate_id)
     .bind(payload_value)
     .bind(event_id)
     .bind(
@@ -486,7 +513,7 @@ pub async fn append_removal_fact(
             &payload.removed_at.to_wire(),
             &time::format_description::well_known::Rfc3339,
         )
-        .map_err(|error| text_violation(capture_id, error))?,
+        .map_err(|error| text_violation(aggregate_id, error))?,
     )
     .execute(&mut *transaction)
     .await?;

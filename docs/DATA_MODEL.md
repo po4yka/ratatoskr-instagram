@@ -18,7 +18,8 @@
   `own_media_sync_items` stages complete candidate generations linked to raw JSON evidence; and
   `own_media_authority` points at the one visible completed generation.
 - normalized own-media `media` / immutable `media_revisions` rows use `official_api` and
-  `authoritative_platform_state`; expiring provider URLs remain observations, never BlobRefs.
+  `authoritative_platform_state`; media rows distinguish reference-only, stored, expired, and
+  deletion-pending state with content hash, byte length, and retention deadline where applicable.
 - `captures`, canonical URLs, acquisition, saved authority, captured time, notes/collection references.
 - resolved posts/reels, authors, media, relations, upstream status, resolution attempts.
 - `export_snapshots` owns immutable owner/digest receipts and the archive BlobRef;
@@ -26,6 +27,12 @@
   or terminal `failed`; `export_records` retains deterministic normalized, unknown, warning, and
   conflict staging evidence; `export_completeness_reports` stores sorted exact gap sets/counts and
   the non-authority disclaimer.
+- `deletion_operations` / `deletion_effects` retain content-free owner audit; local source removals
+  prevent resurrection; `blob_deletion_tasks` converge exact digest/length deletion after all live
+  references disappear.
+- `reresolution_runs` / `reresolution_items` retain bounded job state and skip/outcome classes;
+  `export_reprocessing_runs` / `export_reprocessing_items` retain owner-scoped parser plan/state
+  fingerprints, checkpoints, omissions, and replay state.
 - write audits if supported, outbox/inbox.
 
 ## Constraints
@@ -38,5 +45,7 @@ Own-media pages commit staging/cursor progress separately, but normalized revisi
 authority pointer, and watermark change in one completion transaction after capability revalidation.
 Data Export reconciliation likewise commits revisions, idempotent outbox facts, the completeness
 report, and its terminal transition together. A missing export identity never updates captures,
-tombstones, upstream availability, or stronger official/explicit provenance. Archive bytes live
-only under the configured protected blob root; referenced media remains metadata inside that ZIP.
+local removals, upstream availability, or stronger official/explicit provenance. Privacy deletion
+commits owned SQL erasure, local removal guards, content-free audit/effects, blob work, and canonical
+Knowledge deletion requests atomically; BlobStore I/O follows after commit. Archive bytes live only
+under the configured protected blob root; referenced media remains metadata inside that ZIP.

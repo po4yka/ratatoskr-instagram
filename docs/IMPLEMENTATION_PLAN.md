@@ -8,7 +8,7 @@
 6. Add encrypted official account OAuth and capability discovery.
 7. Add own-media synchronization for supported account types. **Complete.**
 8. Implement immutable safe Data Export intake, versioned parser, and completeness report.
-9. Add media policy, privacy deletion, re-resolution, and restartable import tooling.
+9. Add media policy, privacy deletion, re-resolution, and restartable parser reprocessing tooling. **Complete.**
 10. Add separately approved provider writes only after explicit ADR/consent design.
 
 Definition of Done: provenance is truthful, no hidden session access exists, archives are safely parsed, private data authorized, schema/events/tests and the planned workspace capture flow pass.

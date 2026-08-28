@@ -11,6 +11,199 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::config::TelemetryConfig;
 
+/// One bounded lifecycle metric and its low-cardinality label keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LifecycleMetricDescriptor {
+    /// Stable Prometheus metric name.
+    pub name: &'static str,
+    /// Closed label keys; values come only from enums in this module.
+    pub labels: &'static [&'static str],
+}
+
+/// Returns the complete item-9 lifecycle metric surface.
+#[must_use]
+pub const fn lifecycle_metric_descriptors() -> &'static [LifecycleMetricDescriptor] {
+    &[
+        LifecycleMetricDescriptor {
+            name: "instagram_media_admission_total",
+            labels: &["outcome", "reason"],
+        },
+        LifecycleMetricDescriptor {
+            name: "instagram_deletion_operations_total",
+            labels: &["target", "phase", "outcome"],
+        },
+        LifecycleMetricDescriptor {
+            name: "instagram_blob_deletion_attempts_total",
+            labels: &["outcome", "failure_class"],
+        },
+        LifecycleMetricDescriptor {
+            name: "instagram_blob_deletion_pending",
+            labels: &[],
+        },
+        LifecycleMetricDescriptor {
+            name: "instagram_reresolution_attempts_total",
+            labels: &["outcome", "reason"],
+        },
+        LifecycleMetricDescriptor {
+            name: "instagram_reresolution_duration_seconds",
+            labels: &["outcome"],
+        },
+        LifecycleMetricDescriptor {
+            name: "instagram_export_reprocessing_total",
+            labels: &["mode", "outcome"],
+        },
+        LifecycleMetricDescriptor {
+            name: "instagram_export_reprocessing_duration_seconds",
+            labels: &["mode", "outcome"],
+        },
+    ]
+}
+
+/// Closed lifecycle operation vocabulary used as metric label values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleOperation {
+    /// Provider-media policy admission.
+    MediaAdmission,
+    /// Capture-target owner deletion.
+    CaptureDeletion,
+    /// Connection-target owner deletion.
+    ConnectionDeletion,
+    /// Digest-verified `BlobStore` cleanup.
+    BlobDeletion,
+    /// Public capture re-resolution.
+    ReResolution,
+    /// Read-only retained-export reprocessing.
+    ExportDryRun,
+    /// First mutating retained-export reprocessing pass.
+    ExportApply,
+    /// Resumed mutating retained-export reprocessing pass.
+    ExportResume,
+}
+
+/// Closed lifecycle outcome vocabulary used as metric label values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleOutcome {
+    /// Work was admitted or started.
+    Admitted,
+    /// Policy retained only metadata and references.
+    MetadataOnly,
+    /// Work reached its terminal successful state.
+    Complete,
+    /// Durable external cleanup remains pending.
+    Pending,
+    /// A finite or privacy guard skipped work before I/O.
+    Skipped,
+    /// Normalized content was unchanged.
+    Unchanged,
+    /// Normalized content changed.
+    Updated,
+    /// A safe refusal occurred.
+    Refused,
+    /// A bounded operational failure occurred.
+    Failed,
+}
+
+impl LifecycleOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admitted => "admitted",
+            Self::MetadataOnly => "metadata_only",
+            Self::Complete => "complete",
+            Self::Pending => "pending",
+            Self::Skipped => "skipped",
+            Self::Unchanged => "unchanged",
+            Self::Updated => "updated",
+            Self::Refused => "refused",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Records one bounded lifecycle outcome without identifiers or content labels.
+pub fn record_lifecycle_outcome(
+    operation: LifecycleOperation,
+    outcome: LifecycleOutcome,
+    duration: Option<std::time::Duration>,
+) {
+    let outcome = outcome.as_str();
+    match operation {
+        LifecycleOperation::MediaAdmission => {
+            counter!("instagram_media_admission_total", "outcome" => outcome, "reason" => "bounded")
+                .increment(1);
+        }
+        LifecycleOperation::CaptureDeletion | LifecycleOperation::ConnectionDeletion => {
+            let target = if operation == LifecycleOperation::CaptureDeletion {
+                "capture"
+            } else {
+                "connection"
+            };
+            counter!(
+                "instagram_deletion_operations_total",
+                "target" => target,
+                "phase" => "sql_and_outbox",
+                "outcome" => outcome,
+            )
+            .increment(1);
+        }
+        LifecycleOperation::BlobDeletion => {
+            counter!(
+                "instagram_blob_deletion_attempts_total",
+                "outcome" => outcome,
+                "failure_class" => "bounded",
+            )
+            .increment(1);
+        }
+        LifecycleOperation::ReResolution => {
+            counter!(
+                "instagram_reresolution_attempts_total",
+                "outcome" => outcome,
+                "reason" => "bounded",
+            )
+            .increment(1);
+            if let Some(duration) = duration {
+                histogram!("instagram_reresolution_duration_seconds", "outcome" => outcome)
+                    .record(duration.as_secs_f64());
+            }
+        }
+        LifecycleOperation::ExportDryRun => {
+            record_export_reprocessing("dry_run", outcome, duration);
+        }
+        LifecycleOperation::ExportApply => {
+            record_export_reprocessing("apply", outcome, duration);
+        }
+        LifecycleOperation::ExportResume => {
+            record_export_reprocessing("resume", outcome, duration);
+        }
+    }
+}
+
+fn record_export_reprocessing(
+    mode: &'static str,
+    outcome: &'static str,
+    duration: Option<std::time::Duration>,
+) {
+    counter!(
+        "instagram_export_reprocessing_total",
+        "mode" => mode,
+        "outcome" => outcome,
+    )
+    .increment(1);
+    if let Some(duration) = duration {
+        histogram!(
+            "instagram_export_reprocessing_duration_seconds",
+            "mode" => mode,
+            "outcome" => outcome,
+        )
+        .record(duration.as_secs_f64());
+    }
+}
+
+/// Updates the bounded count of durable blob deletion tasks still pending.
+pub fn record_pending_blob_deletions(count: u64) {
+    let value = f64::from(u32::try_from(count).unwrap_or(u32::MAX));
+    gauge!("instagram_blob_deletion_pending").set(value);
+}
+
 /// Closed Data Export pipeline stage label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataExportStage {

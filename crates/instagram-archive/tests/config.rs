@@ -334,3 +334,105 @@ fn data_export_configuration_is_disabled_strict_and_secret_free() {
     .expect_err("unknown Data Export keys stay closed");
     assert!(unknown.to_string().contains("DATA_EXPORT__UNBOUNDED"));
 }
+
+#[test]
+fn item9_workers_require_disabled_or_finite_nonzero_budgets() {
+    let defaults = Config::from_environment([("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222")])
+        .expect("item-9 capabilities are safely disabled by default");
+    let defaults = serde_json::to_value(defaults).expect("effective config serializes");
+    for section in [
+        "media_retention",
+        "blob_deletion",
+        "re_resolution",
+        "reprocessing",
+    ] {
+        assert_eq!(
+            defaults[section]["enabled"], false,
+            "{section} must be explicitly disabled by default"
+        );
+    }
+
+    for enabled_key in [
+        "RATATOSKR__MEDIA_RETENTION__ENABLED",
+        "RATATOSKR__BLOB_DELETION__ENABLED",
+        "RATATOSKR__RE_RESOLUTION__ENABLED",
+        "RATATOSKR__REPROCESSING__ENABLED",
+    ] {
+        let error = Config::from_environment([
+            ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+            (enabled_key, "true"),
+        ])
+        .expect_err("an enabled capability requires every reviewed finite guard");
+        assert!(
+            error.to_string().contains(enabled_key),
+            "the enabled section must be identified: {error}"
+        );
+    }
+
+    let invalid = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        ("RATATOSKR__MEDIA_RETENTION__ENABLED", "true"),
+        ("RATATOSKR__MEDIA_RETENTION__MAX_OBJECT_BYTES", "0"),
+        (
+            "RATATOSKR__MEDIA_RETENTION__MAX_OWNER_BYTES",
+            "999999999999999",
+        ),
+        ("RATATOSKR__MEDIA_RETENTION__MAX_URL_LIFETIME_SECONDS", "0"),
+        ("RATATOSKR__BLOB_DELETION__ENABLED", "true"),
+        ("RATATOSKR__BLOB_DELETION__POLL_INTERVAL_MS", "0"),
+        ("RATATOSKR__BLOB_DELETION__BATCH_SIZE", "999999"),
+        ("RATATOSKR__BLOB_DELETION__MAX_ATTEMPTS", "0"),
+        ("RATATOSKR__RE_RESOLUTION__ENABLED", "true"),
+        ("RATATOSKR__RE_RESOLUTION__RECENCY_WINDOW_SECONDS", "0"),
+        ("RATATOSKR__RE_RESOLUTION__ITEM_BUDGET", "10"),
+        ("RATATOSKR__RE_RESOLUTION__REQUEST_BUDGET", "11"),
+        ("RATATOSKR__RE_RESOLUTION__RESPONSE_BYTE_BUDGET", "0"),
+        ("RATATOSKR__RE_RESOLUTION__DURATION_BUDGET_MS", "0"),
+        ("RATATOSKR__RE_RESOLUTION__CONCURRENCY_LIMIT", "11"),
+        ("RATATOSKR__RE_RESOLUTION__PROVIDER_CALL_BUDGET", "12"),
+        ("RATATOSKR__REPROCESSING__ENABLED", "true"),
+        (
+            "RATATOSKR__REPROCESSING__MAX_ITEMS_PER_INVOCATION",
+            "999999",
+        ),
+    ])
+    .expect_err("zero, unbounded, and inconsistent guards must fail closed");
+    let rendered = invalid.to_string();
+    for section in [
+        "MEDIA_RETENTION",
+        "BLOB_DELETION",
+        "RE_RESOLUTION",
+        "REPROCESSING",
+    ] {
+        assert!(rendered.contains(section), "missing {section}: {rendered}");
+    }
+
+    let valid = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        ("RATATOSKR__MEDIA_RETENTION__ENABLED", "true"),
+        ("RATATOSKR__MEDIA_RETENTION__MAX_OBJECT_BYTES", "10485760"),
+        ("RATATOSKR__MEDIA_RETENTION__MAX_OWNER_BYTES", "104857600"),
+        (
+            "RATATOSKR__MEDIA_RETENTION__MAX_URL_LIFETIME_SECONDS",
+            "3600",
+        ),
+        ("RATATOSKR__BLOB_DELETION__ENABLED", "true"),
+        ("RATATOSKR__BLOB_DELETION__POLL_INTERVAL_MS", "1000"),
+        ("RATATOSKR__BLOB_DELETION__BATCH_SIZE", "16"),
+        ("RATATOSKR__BLOB_DELETION__MAX_ATTEMPTS", "5"),
+        ("RATATOSKR__RE_RESOLUTION__ENABLED", "true"),
+        ("RATATOSKR__RE_RESOLUTION__RECENCY_WINDOW_SECONDS", "604800"),
+        ("RATATOSKR__RE_RESOLUTION__ITEM_BUDGET", "100"),
+        ("RATATOSKR__RE_RESOLUTION__REQUEST_BUDGET", "50"),
+        ("RATATOSKR__RE_RESOLUTION__RESPONSE_BYTE_BUDGET", "10485760"),
+        ("RATATOSKR__RE_RESOLUTION__DURATION_BUDGET_MS", "30000"),
+        ("RATATOSKR__RE_RESOLUTION__CONCURRENCY_LIMIT", "4"),
+        ("RATATOSKR__RE_RESOLUTION__PROVIDER_CALL_BUDGET", "50"),
+        ("RATATOSKR__REPROCESSING__ENABLED", "true"),
+        ("RATATOSKR__REPROCESSING__MAX_ITEMS_PER_INVOCATION", "1000"),
+    ])
+    .expect("reviewed finite item-9 guards load");
+    let valid = serde_json::to_value(valid).expect("effective config serializes");
+    assert_eq!(valid["re_resolution"]["request_budget"], 50);
+    assert_eq!(valid["reprocessing"]["max_items_per_invocation"], 1_000);
+}

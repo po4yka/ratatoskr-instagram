@@ -13,8 +13,10 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 
 mod data_export;
+mod item9;
 
 pub use data_export::DataExportConfig;
+pub use item9::{BlobDeletionConfig, MediaRetentionConfig, ReResolutionConfig, ReprocessingConfig};
 
 const ENV_PREFIX: &str = "RATATOSKR__";
 
@@ -39,6 +41,14 @@ pub struct Config {
     pub own_media: OwnMediaSyncConfig,
     /// Disabled-by-default authenticated Instagram Data Export intake.
     pub data_export: DataExportConfig,
+    /// Disabled-by-default media byte retention policy.
+    pub media_retention: MediaRetentionConfig,
+    /// Disabled-by-default `BlobStore` deletion worker.
+    pub blob_deletion: BlobDeletionConfig,
+    /// Disabled-by-default recent-capture re-resolution worker.
+    pub re_resolution: ReResolutionConfig,
+    /// Disabled-by-default parser reprocessing mutation tooling.
+    pub reprocessing: ReprocessingConfig,
     /// `JetStream` command-consumer configuration.
     pub bus: Option<BusConfig>,
 }
@@ -272,6 +282,7 @@ impl Config {
         validate_oauth(&config.oauth, &mut violations);
         validate_own_media(&config, &mut violations);
         config.data_export.validate(&mut violations);
+        item9::validate(&config, &mut violations);
 
         if config.bus.as_ref().is_none_or(|bus| bus.url.is_empty()) {
             violations.push(Violation {
@@ -686,6 +697,15 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
         key if key.starts_with("RATATOSKR__DATA_EXPORT__") => {
             config.data_export.apply_environment(key, value, violations);
         }
+        key if key.starts_with("RATATOSKR__MEDIA_RETENTION__")
+            || key.starts_with("RATATOSKR__BLOB_DELETION__")
+            || key.starts_with("RATATOSKR__RE_RESOLUTION__")
+            || key.starts_with("RATATOSKR__REPROCESSING__") =>
+        {
+            if !item9::apply_environment(config, key, value, violations) {
+                violations.push(refused("is not recognized"));
+            }
+        }
         "RATATOSKR__BUS__URL" => {
             if matches!(value.split("://").next(), Some("nats" | "tls")) && !value.contains('@') {
                 let bus = config.bus.get_or_insert_with(default_bus);
@@ -768,6 +788,32 @@ impl Default for Config {
                 call_budget: 8,
             },
             data_export: DataExportConfig::default(),
+            media_retention: MediaRetentionConfig {
+                enabled: false,
+                max_object_bytes: None,
+                max_owner_bytes: None,
+                max_url_lifetime_seconds: None,
+            },
+            blob_deletion: BlobDeletionConfig {
+                enabled: false,
+                poll_interval_ms: None,
+                batch_size: None,
+                max_attempts: None,
+            },
+            re_resolution: ReResolutionConfig {
+                enabled: false,
+                recency_window_seconds: None,
+                item_budget: None,
+                request_budget: None,
+                response_byte_budget: None,
+                duration_budget_ms: None,
+                concurrency_limit: None,
+                provider_call_budget: None,
+            },
+            reprocessing: ReprocessingConfig {
+                enabled: false,
+                max_items_per_invocation: None,
+            },
             bus: None,
         }
     }

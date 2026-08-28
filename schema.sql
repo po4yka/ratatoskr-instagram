@@ -270,6 +270,13 @@ create table instagram_archive.media (
     saved_authority     text        not null,
     upstream_status     text        not null,
     current_revision_id uuid,
+    blob_ref            text,
+    content_hash        bytea,
+    byte_size           bigint,
+    media_state         text        not null default 'metadata_only',
+    retention_class     text        not null default 'metadata_only',
+    retention_deadline  timestamptz,
+    retention_reason    text,
     created_at          timestamptz not null default now(),
     updated_at          timestamptz not null default now(),
     constraint media_provider_media_id_key unique (provider_media_id),
@@ -287,7 +294,21 @@ create table instagram_archive.media (
             ('explicit_user_capture', 'export_observation', 'authoritative_platform_state',
              'legacy_observation')),
     constraint media_upstream_status_check
-        check (upstream_status in ('available', 'unavailable', 'deleted', 'private', 'unknown'))
+        check (upstream_status in ('available', 'unavailable', 'deleted', 'private', 'unknown')),
+    constraint media_media_state_check
+        check (media_state in ('metadata_only', 'bytes_archived')),
+    constraint media_retention_class_check
+        check (retention_class in ('metadata_only', 'explicit_archive', 'policy_archive')),
+    constraint media_retention_reason_check
+        check (retention_reason is null or length(retention_reason) between 1 and 64),
+    constraint media_archived_evidence_check check (
+        (media_state = 'metadata_only' and blob_ref is null and content_hash is null
+            and byte_size is null and retention_class = 'metadata_only')
+        or
+        (media_state = 'bytes_archived' and blob_ref is not null and content_hash is not null
+            and byte_size is not null and byte_size >= 0
+            and retention_class in ('explicit_archive', 'policy_archive'))
+    )
 );
 
 comment on table instagram_archive.media is
@@ -464,6 +485,7 @@ create table instagram_archive.captures (
     note               text,
     client_idempotency_key text,
     captured_at        timestamptz not null,
+    next_resolution_at timestamptz,
     created_at         timestamptz not null default now(),
     constraint captures_media_id_fkey foreign key (media_id)
         references instagram_archive.media (media_id),
@@ -489,22 +511,8 @@ comment on table instagram_archive.captures is
     'platform operation key for correlation and never participates in identity.';
 
 -- ---------------------------------------------------------------------------------------------
--- capture_tombstones and capture_analysis_links
+-- capture_analysis_links
 -- ---------------------------------------------------------------------------------------------
-
-create table instagram_archive.capture_tombstones (
-    capture_id uuid primary key,
-    removed_at timestamptz not null,
-    reason text not null,
-    constraint capture_tombstones_capture_id_fkey foreign key (capture_id)
-        references instagram_archive.captures (capture_id),
-    constraint capture_tombstones_reason_check
-        check (reason in ('user_requested', 'retention_policy'))
-);
-
-comment on table instagram_archive.capture_tombstones is
-    'Local removal facts. A tombstone means Ratatoskr no longer preserves the source; it never '
-    'asserts that Instagram removed the provider object.';
 
 create table instagram_archive.capture_analysis_links (
     capture_id uuid not null,
@@ -773,3 +781,206 @@ create table instagram_archive.inbox_events (
 
 comment on table instagram_archive.inbox_events is
     'Consumer inbox deduplication under at-least-once delivery.';
+
+-- ---------------------------------------------------------------------------------------------
+-- item-9 lifecycle operations
+-- ---------------------------------------------------------------------------------------------
+--
+-- These are first-version definitions, not a migration ledger. Deletion audit is deliberately
+-- structural: it contains identifiers, closed classes and counts, never content-bearing JSON.
+
+create table instagram_archive.deletion_operations (
+    operation_id uuid        primary key,
+    user_ref     uuid        not null,
+    target_kind  text        not null,
+    target_id    uuid        not null,
+    reason       text        not null,
+    state        text        not null,
+    requested_at timestamptz not null,
+    updated_at   timestamptz not null default now(),
+    finished_at  timestamptz,
+    constraint deletion_operations_target_check
+        check (target_kind in ('capture', 'connection')),
+    constraint deletion_operations_reason_check
+        check (reason in ('user_requested', 'retention_policy')),
+    constraint deletion_operations_state_check
+        check (state in ('planned', 'database_committed', 'pending_blob_deletion', 'complete', 'failed')),
+    constraint deletion_operations_owner_operation_key unique (user_ref, operation_id)
+);
+
+comment on table instagram_archive.deletion_operations is
+    'Content-free owner deletion audit and idempotency identity; target rows may be physically gone.';
+
+create table instagram_archive.deletion_effects (
+    operation_id   uuid   not null,
+    data_class     text   not null,
+    action         text   not null,
+    affected_count bigint not null,
+    primary key (operation_id, data_class, action),
+    constraint deletion_effects_operation_id_fkey foreign key (operation_id)
+        references instagram_archive.deletion_operations (operation_id),
+    constraint deletion_effects_data_class_check
+        check (data_class ~ '^[a-z][a-z0-9_]{0,63}$'),
+    constraint deletion_effects_action_check
+        check (action in ('delete', 'detach', 'retain_audit', 'retain_shared', 'not_applicable')),
+    constraint deletion_effects_count_check check (affected_count >= 0)
+);
+
+comment on table instagram_archive.deletion_effects is
+    'Bounded per-class row/blob counts for one deletion; no payload, URL, note, token, or body.';
+
+create table instagram_archive.local_source_removals (
+    user_ref         uuid        not null,
+    social_source_id uuid        not null,
+    capture_id       uuid,
+    media_id         uuid,
+    operation_id     uuid        not null,
+    reason           text        not null,
+    removed_at       timestamptz not null,
+    primary key (user_ref, social_source_id),
+    constraint local_source_removals_operation_id_fkey foreign key (operation_id)
+        references instagram_archive.deletion_operations (operation_id),
+    constraint local_source_removals_reason_check
+        check (reason in ('user_requested', 'retention_policy')),
+    constraint local_source_removals_subject_check
+        check (num_nonnulls(capture_id, media_id) = 1)
+);
+
+comment on table instagram_archive.local_source_removals is
+    'Content-free local-library removal guard; distinct from Instagram availability evidence.';
+
+create table instagram_archive.blob_deletion_tasks (
+    task_id            uuid        primary key,
+    operation_id       uuid,
+    blob_ref           text        not null,
+    content_hash       bytea       not null,
+    byte_size          bigint      not null,
+    media_class        text        not null,
+    state              text        not null,
+    attempt_count      integer     not null default 0,
+    last_failure_class text,
+    created_at         timestamptz not null default now(),
+    updated_at         timestamptz not null default now(),
+    completed_at       timestamptz,
+    constraint blob_deletion_tasks_operation_id_fkey foreign key (operation_id)
+        references instagram_archive.deletion_operations (operation_id),
+    constraint blob_deletion_tasks_blob_key unique (blob_ref, content_hash),
+    constraint blob_deletion_tasks_state_check check (state in ('pending', 'complete')),
+    constraint blob_deletion_tasks_attempt_count_check check (attempt_count >= 0),
+    constraint blob_deletion_tasks_byte_size_check check (byte_size >= 0),
+    constraint blob_deletion_tasks_media_class_check
+        check (media_class in ('provider_media', 'data_export_archive', 'raw_response', 'user_upload')),
+    constraint blob_deletion_tasks_failure_class_check
+        check (last_failure_class is null or last_failure_class in
+            ('storage_unavailable', 'digest_mismatch', 'still_referenced'))
+);
+
+comment on table instagram_archive.blob_deletion_tasks is
+    'Durable idempotent deletion of an unreferenced Instagram-owned content-addressed object.';
+
+create table instagram_archive.reresolution_runs (
+    run_id               uuid        primary key,
+    user_ref             uuid        not null,
+    state                text        not null,
+    max_items            integer     not null,
+    max_requests         integer     not null,
+    max_response_bytes   bigint      not null,
+    max_concurrency      integer     not null,
+    deadline_at          timestamptz not null,
+    items_admitted       integer     not null default 0,
+    requests_reserved    integer     not null default 0,
+    response_bytes       bigint      not null default 0,
+    started_at           timestamptz not null default now(),
+    finished_at          timestamptz,
+    constraint reresolution_runs_state_check
+        check (state in ('running', 'completed', 'completed_with_failures', 'failed')),
+    constraint reresolution_runs_positive_limits_check check (
+        max_items > 0 and max_requests > 0 and max_response_bytes > 0 and max_concurrency > 0
+    ),
+    constraint reresolution_runs_counters_check check (
+        items_admitted >= 0 and items_admitted <= max_items
+        and requests_reserved >= 0 and requests_reserved <= max_requests
+        and response_bytes >= 0 and response_bytes <= max_response_bytes
+    )
+);
+
+comment on table instagram_archive.reresolution_runs is
+    'Finite owner-scoped public re-resolution budget and bounded aggregate outcome.';
+
+create table instagram_archive.reresolution_items (
+    run_id          uuid        not null,
+    capture_id      uuid        not null,
+    state           text        not null,
+    skip_reason     text,
+    attempt_count   integer     not null default 0,
+    response_bytes  bigint      not null default 0,
+    claimed_at      timestamptz,
+    finished_at     timestamptz,
+    primary key (run_id, capture_id),
+    constraint reresolution_items_run_id_fkey foreign key (run_id)
+        references instagram_archive.reresolution_runs (run_id),
+    constraint reresolution_items_state_check
+        check (state in ('candidate', 'claimed', 'updated', 'unchanged', 'skipped', 'failed')),
+    constraint reresolution_items_skip_reason_check
+        check (skip_reason is null or skip_reason in
+            ('not_due', 'too_old', 'not_live', 'privacy_terminal', 'unsupported', 'item_budget',
+             'request_budget', 'byte_budget', 'deadline', 'concurrency', 'provider_budget')),
+    constraint reresolution_items_counters_check check (attempt_count >= 0 and response_bytes >= 0)
+);
+
+comment on table instagram_archive.reresolution_items is
+    'Deterministic candidate and outcome evidence; capture_id remains after local deletion for audit.';
+
+create table instagram_archive.export_reprocessing_runs (
+    reprocessing_run_id uuid        primary key,
+    operation_id        uuid        not null,
+    import_run_id       uuid        not null,
+    user_ref            uuid        not null,
+    detected_layout     text        not null,
+    parser_id           text        not null,
+    state               text        not null,
+    plan_fingerprint    text        not null,
+    state_fingerprint   text        not null,
+    checkpoint_item_key text,
+    report              jsonb,
+    started_at          timestamptz not null default now(),
+    updated_at          timestamptz not null default now(),
+    finished_at         timestamptz,
+    constraint export_reprocessing_runs_import_run_id_fkey foreign key (import_run_id)
+        references instagram_archive.import_runs (run_id),
+    constraint export_reprocessing_runs_owner_operation_key unique (user_ref, operation_id),
+    constraint export_reprocessing_runs_state_check
+        check (state in ('running', 'completed', 'completed_with_warnings', 'failed')),
+    constraint export_reprocessing_runs_version_check
+        check (length(detected_layout) between 1 and 128 and length(parser_id) between 1 and 128),
+    constraint export_reprocessing_runs_fingerprint_check
+        check (length(plan_fingerprint) = 64 and length(state_fingerprint) = 64)
+);
+
+comment on table instagram_archive.export_reprocessing_runs is
+    'Separate parser-version operation over one immutable original export receipt; never a schema migration.';
+
+create table instagram_archive.export_reprocessing_items (
+    reprocessing_run_id uuid not null,
+    item_key            text not null,
+    classification      text not null,
+    state               text not null,
+    prospective_digest  text,
+    applied_digest      text,
+    primary key (reprocessing_run_id, item_key),
+    constraint export_reprocessing_items_run_id_fkey foreign key (reprocessing_run_id)
+        references instagram_archive.export_reprocessing_runs (reprocessing_run_id),
+    constraint export_reprocessing_items_item_key_check check (length(item_key) between 1 and 512),
+    constraint export_reprocessing_items_classification_check
+        check (classification in
+            ('normalized', 'unknown_record', 'unknown_section', 'conflict', 'warning', 'omitted')),
+    constraint export_reprocessing_items_state_check
+        check (state in ('planned', 'applied', 'skipped', 'conflict', 'warning')),
+    constraint export_reprocessing_items_digest_check check (
+        (prospective_digest is null or length(prospective_digest) = 64)
+        and (applied_digest is null or length(applied_digest) = 64)
+    )
+);
+
+comment on table instagram_archive.export_reprocessing_items is
+    'Content-free deterministic checkpoint and digest outcome for one retained-export item.';

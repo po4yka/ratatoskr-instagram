@@ -4,7 +4,7 @@ use ratatoskr_social_contracts::RemovalReason;
 use uuid::Uuid;
 
 use crate::Database;
-use crate::publishing::{PublishError, append_removal_fact, instant_from_time};
+use crate::publishing::{PublishError, append_removal_fact, instant_from_time, source_identity};
 
 /// Result of applying a local capture tombstone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,19 +46,23 @@ impl Database {
         removed_at: time::OffsetDateTime,
     ) -> Result<TombstoneOutcome, TombstoneError> {
         let mut transaction = self.pool().begin().await?;
-        let exists: Option<(Uuid,)> = sqlx::query_as(
-            "select capture_id from instagram_archive.captures where capture_id = $1 for update",
+        let capture: Option<(Uuid, String)> = sqlx::query_as(
+            "select user_ref, canonical_url from instagram_archive.captures \
+             where capture_id = $1 for update",
         )
         .bind(capture_id)
         .fetch_optional(&mut *transaction)
         .await?;
-        if exists.is_none() {
+        let Some((user_ref, canonical_url)) = capture else {
             return Err(TombstoneError::UnknownCapture);
-        }
+        };
+        let social_source_id = source_identity(user_ref, &canonical_url);
         let present: Option<(Uuid,)> = sqlx::query_as(
-            "select capture_id from instagram_archive.capture_tombstones where capture_id = $1",
+            "select capture_id from instagram_archive.local_source_removals \
+             where user_ref = $1 and social_source_id = $2",
         )
-        .bind(capture_id)
+        .bind(user_ref)
+        .bind(social_source_id)
         .fetch_optional(&mut *transaction)
         .await?;
         if present.is_some() {
@@ -66,15 +70,32 @@ impl Database {
             return Ok(TombstoneOutcome::Duplicate);
         }
 
+        sqlx::query(
+            "insert into instagram_archive.deletion_operations \
+             (operation_id, user_ref, target_kind, target_id, reason, state, \
+              requested_at, updated_at, finished_at) \
+             values ($1, $2, 'capture', $3, $4, 'complete', $5, $5, $5) \
+             on conflict (operation_id) do nothing",
+        )
+        .bind(capture_id)
+        .bind(user_ref)
+        .bind(capture_id)
+        .bind(removal_reason_wire(reason))
+        .bind(removed_at)
+        .execute(&mut *transaction)
+        .await?;
         let removed_wire = instant_from_time(removed_at, capture_id)?;
         append_removal_fact(&mut transaction, capture_id, reason, removed_wire).await?;
         sqlx::query(
-            "insert into instagram_archive.capture_tombstones (capture_id, removed_at, reason) \
-             values ($1, $2, $3)",
+            "insert into instagram_archive.local_source_removals \
+             (user_ref, social_source_id, capture_id, operation_id, reason, removed_at) \
+             values ($1, $2, $3, $3, $4, $5)",
         )
+        .bind(user_ref)
+        .bind(social_source_id)
         .bind(capture_id)
-        .bind(removed_at)
         .bind(removal_reason_wire(reason))
+        .bind(removed_at)
         .execute(&mut *transaction)
         .await?;
         sqlx::query(

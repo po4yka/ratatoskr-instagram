@@ -603,20 +603,30 @@ Dependencies:
 
 No browser profile, Chromium dependency, Git CLI, or direct Knowledge database access is required.
 
-## 22. Migration architecture
+## 22. Lifecycle policy and parser reprocessing
 
-Legacy Instagram-like captures are imported with explicit `LegacyImport` and `LegacyObservation` provenance.
+Media references and byte retention are separate capabilities. Reference-only is the default;
+explicit finite policy admission precedes a bounded fetch, validation, hash, and protected BlobRef.
+Reference expiry and privacy deletion detach SQL references first, then durable tasks verify global
+reference absence and exact digest/length before filesystem deletion.
 
-Migration process:
+Capture and account-connection deletion use a closed inventory of every owned relation and protected
+blob class. Target ownership, deterministic planning, erasure, content-free audit/effects, local
+removal guards, blob tasks, and canonical downstream deletion requests share one transaction.
+Independent explicit-capture/Data Export holdings survive connection deletion. Downstream Knowledge
+consumption is asynchronous and is never inferred from local commit.
 
-1. Preserve original URL, timestamps, notes, files, and raw metadata.
-2. Normalize supported URL forms.
-3. Resolve only through supported current provider surfaces.
-4. Keep unresolved items as archived captures.
-5. Deduplicate provider objects while preserving separate capture intents.
-6. Build SocialSource projections.
-7. Reindex through Knowledge.
-8. Never reinterpret legacy captures as native Saved state.
+Recent due captures re-enter the supported public-resolution pipeline only after owner/privacy and
+finite item/request/byte/deadline/concurrency/provider guards pass immediately before I/O. Raw
+evidence stays append-only; equal normalized content emits no duplicate update.
+
+Parser-version reprocessing accepts only owner-matching immutable Data Export receipts and an exact
+registered layout/parser. Dry-run is read-only; apply shares its deterministic plan/report, commits
+bounded checkpoints, resumes idempotently, and retains old evidence for omissions. It is not schema
+migration. Development still uses one in-place `schema.sql` and disposable databases.
+
+Legacy monolith import remains outside this repository item and belongs to fleet cutover. No legacy
+reader, database scanner, compatibility path, or import command is added here.
 
 ## 23. Architectural invariants
 
@@ -634,6 +644,10 @@ Migration process:
 12. Analysis is delegated to Knowledge.
 13. Delivery is at-least-once and handlers are idempotent.
 14. Provider capability changes are explicit runtime state.
+15. Media remains reference-only unless explicit finite policy admits verified bytes.
+16. Privacy deletion cannot erase another owner or an independent holding.
+17. Local deletion requests Knowledge erasure but never claims downstream completion.
+18. Re-resolution and reprocessing are bounded, owner-scoped, and replay-safe.
 
 ## 24. Evolution
 
@@ -647,7 +661,7 @@ Initial milestones:
 6. Raw-first Data Export intake and first versioned parser.
 7. Completeness reports and unknown-record preservation.
 8. User-supplied media path and privacy controls.
-9. Revalidation, rate-limit budgets, and operational runbooks.
-10. Migration of legacy captures.
+9. Media retention, complete privacy deletion, re-resolution budgets, and parser reprocessing. **Complete.**
+10. Migration of legacy captures through the separate fleet cutover plan.
 
 Changes to acquisition authority, provider-session policy, or private-content handling require ADRs and coordinated workspace changesets.

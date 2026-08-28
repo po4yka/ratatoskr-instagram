@@ -8,8 +8,8 @@
 //! bind both listeners (operator and product), mark readiness — then serve
 //! until SIGTERM or SIGINT and drain within the configured bound.
 //!
-//! Exit codes: `0` clean run; `1` runtime startup failure; `78`
-//! (`EX_CONFIG`) configuration unreadable or invalid.
+//! Exit codes: `0` clean run; `1` runtime failure; `2` invalid command
+//! grammar; `78` (`EX_CONFIG`) configuration unreadable or invalid.
 
 use std::future::IntoFuture as _;
 use std::process::ExitCode;
@@ -32,6 +32,8 @@ use ratatoskr_instagram_archive_service::{
 };
 use uuid::Uuid;
 
+mod reprocess_export;
+
 /// How often the prober copies the database answer into the readiness facts.
 ///
 /// Long enough that the probe is not itself load; short enough that a
@@ -39,6 +41,13 @@ use uuid::Uuid;
 const DATABASE_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 
 fn main() -> ExitCode {
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "reprocess-export")
+    {
+        return reprocess_export::run(&arguments);
+    }
     if std::env::args().nth(1).as_deref() == Some("check-config") {
         return check_config();
     }
@@ -48,10 +57,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// `<binary> check-config`: load and validate without binding anything.
-///
-/// Both outputs go to stderr: no subscriber exists yet, and a stray line on
-/// stdout could be mistaken for a log record. The effective configuration is
 /// safe to render because every secret member is redacted by type.
 fn check_config() -> ExitCode {
     match Config::load() {

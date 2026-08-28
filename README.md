@@ -2,7 +2,7 @@
 
 `ratatoskr-instagram` is the Instagram account and capture bounded context for Ratatoskr. It combines official account access where available with explicit user-initiated captures, public oEmbed resolution, and versioned Data Export imports.
 
-> **Status:** implementation plan items 1–8 are complete. The official account and Data Export lanes are disabled by default. Data Export accepts owner-authenticated ZIP uploads, preserves the exact archive through a BlobRef, advances a durable bounded import worker, and returns an owner-scoped completeness report. Its first parser is proved against a synthetic/redacted fixture only; compatibility with a real owner export is not yet verified.
+> **Status:** implementation plan items 1–9 are complete. Media-byte retention, blob cleanup, recent-capture re-resolution, and parser reprocessing mutation are disabled by default and require finite reviewed budgets. Data Export accepts owner-authenticated ZIP uploads, preserves the exact archive through a BlobRef, advances a durable bounded import worker, and returns an owner-scoped completeness report. Its first parser and reprocessing reports are proved against synthetic/redacted fixtures only; compatibility with a real owner export is not yet verified.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -335,6 +335,14 @@ instagram_data_export_failure_total
 instagram_data_export_category_records_total
 instagram_data_export_warnings_total
 instagram_data_export_completeness_gap_count
+instagram_media_admission_total
+instagram_deletion_operations_total
+instagram_blob_deletion_attempts_total
+instagram_blob_deletion_pending
+instagram_reresolution_attempts_total
+instagram_reresolution_duration_seconds
+instagram_export_reprocessing_total
+instagram_export_reprocessing_duration_seconds
 instagram_reauth_required
 ```
 
@@ -349,6 +357,30 @@ Every capture and import records acquisition method, parser or resolver version,
 - Treating an explicit Ratatoskr capture as authoritative Instagram Saved state.
 - Writing local tags and collections back to Instagram.
 - Claiming complete export coverage without validated evidence.
+- Importing the legacy monolith; that belongs to the fleet cutover plan.
+
+## Media and privacy lifecycle
+
+Captures retain media references by default. Provider bytes are stored only after an explicit
+owner action and finite rights, HTTPS lifetime, MIME, object-size, and owner-budget checks; a
+metadata-only capture is never presented as a media backup. Blob deletion is durable and verifies
+the exact digest and length after every database reference has been detached.
+
+Owner-authorized deletion supports one capture or one official account connection. Its SQL erasure,
+content-free audit/effect rows, local resurrection guard, BlobStore work, and one canonical
+`social.source.removed.v1` request per final source commit atomically. The event is a request for
+Knowledge to erase its own projection; local commit and downstream consumption are distinct facts.
+Shared explicit-capture or Data Export evidence is preserved when a connection is removed.
+
+Recent eligible captures can be re-resolved through the same supported public resolver under
+finite item, request, byte, deadline, concurrency, and provider budgets. Private, deleted,
+unsupported, old, not-due, and locally removed captures do not start requests. Equal normalized
+content appends evidence without emitting a duplicate update.
+
+`reprocess-export dry-run|apply` operates only on an owner-matching immutable Data Export receipt
+and an exactly registered parser. Dry-run is read-only; apply is checkpointed and replay-safe, and
+parser omissions retain prior projections and raw evidence. This is parser-version reprocessing,
+not a database migration or legacy import.
 
 ## Initial milestones
 
@@ -360,7 +392,7 @@ Every capture and import records acquisition method, parser or resolver version,
 6. Add safe versioned Data Export import. **Complete for the admitted synthetic fixture grammar.**
 7. Add supported professional-account OAuth and own-media synchronization. **Complete.**
 8. Integrate linked documents with Extractor and analysis with Knowledge.
-9. Add availability revalidation and provider diagnostics. Data Export completeness reporting is complete.
+9. Add bounded media policy, privacy deletion, recent-capture re-resolution, and restartable parser reprocessing. **Complete.**
 
 ## Workspace integration
 
@@ -368,4 +400,4 @@ Planned: `ratatoskr-workspace` will pin Instagram with compatible social contrac
 
 ## Project status
 
-The process foundation, explicit capture, public resolution, SocialSource outbox, official account connection/capability lifecycle, supported own-media synchronization, and synthetic-fixture-backed Data Export intake are implemented and gated by CI. Real-export parser compatibility, media-byte archival policy, and separately approved provider writes remain future work. `DEVELOPMENT.md` records the exact local and CI gate commands.
+The process foundation, explicit capture, public resolution, SocialSource outbox, official account connection/capability lifecycle, supported own-media synchronization, synthetic-fixture-backed Data Export intake, and the item-9 lifecycle controls are implemented and gated locally. Real-export parser compatibility, live provider validation, legacy monolith cutover, and separately approved provider writes remain future work. `DEVELOPMENT.md` records the exact local and CI gate commands.

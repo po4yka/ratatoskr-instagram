@@ -18,6 +18,13 @@ operation with no HTTP command. Data Export receipt returns `202` for a new immu
 for an exact same-owner replay; status/report responses are `Cache-Control: no-store`, and unknown
 or other-owner run ids both return the same typed `404`.
 
+Privacy deletion and parser reprocessing intentionally have no new HTTP mutation endpoint in this
+slice. Deletion stores atomically append canonical `social.source.removed.v1` outbox requests for
+Knowledge; outbox commit proves local publication intent, not downstream consumption. Operators run
+`reprocess-export dry-run|apply` against an owner-matching retained receipt. Its closed grammar emits
+one content-safe JSON document on stdout and diagnostics on stderr; apply is finite, checkpointed,
+and disabled by default.
+
 ## Outbound
 
 The official-account adapter calls Meta's fixed Instagram Login HTTPS endpoints and claims the
@@ -35,3 +42,6 @@ Generic article extraction is delegated only for external article URLs, not used
 Data Export bearer values never enter bodies, logs, metrics, status responses, or stored config.
 The status report exposes sorted gap identities only to its owner and explicitly disclaims complete
 account history, native Saved membership, unsave, and deletion authority.
+
+Legacy monolith import is not an interface of this repository. Fleet cutover must coordinate that
+separately; parser reprocessing accepts only this service's immutable Data Export receipts.

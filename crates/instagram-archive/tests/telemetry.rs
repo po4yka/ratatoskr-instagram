@@ -175,3 +175,50 @@ fn synthetic_secrets_never_appear_in_logs_metrics_audit_usage_or_http_errors() {
         assert!(!oauth_outcome_label(outcome).contains(SENTINEL));
     }
 }
+
+#[test]
+fn lifecycle_metrics_cover_bounded_outcomes_without_sensitive_labels() {
+    let source = include_str!("../src/telemetry.rs");
+    let required = [
+        "instagram_media_admission_total",
+        "instagram_deletion_operations_total",
+        "instagram_blob_deletion_attempts_total",
+        "instagram_blob_deletion_pending",
+        "instagram_reresolution_attempts_total",
+        "instagram_reresolution_duration_seconds",
+        "instagram_export_reprocessing_total",
+        "instagram_export_reprocessing_duration_seconds",
+    ];
+    let missing = required
+        .into_iter()
+        .filter(|name| !source.contains(name))
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "lifecycle metrics are missing: {missing:?}"
+    );
+
+    let inventory = source
+        .split("pub const fn lifecycle_metric_descriptors")
+        .nth(1)
+        .and_then(|tail| tail.split("pub enum LifecycleOperation").next())
+        .expect("one closed lifecycle metric descriptor inventory");
+    for prohibited in [
+        "owner",
+        "username",
+        "url",
+        "caption",
+        "note",
+        "credential",
+        "raw_body",
+        "path",
+        "capture_id",
+        "source_id",
+        "operation_id",
+    ] {
+        assert!(
+            !inventory.contains(prohibited),
+            "lifecycle metric descriptors expose prohibited label {prohibited}"
+        );
+    }
+}

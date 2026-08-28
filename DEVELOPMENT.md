@@ -1,9 +1,13 @@
 # Developing Ratatoskr Instagram
 
 > Status: Active development
-> Last reviewed: 2026-08-27
+> Last reviewed: 2026-08-28
 
-Implementation plan items 1–8 are implemented. The official account lane, own-media scheduler, and authenticated Data Export lane are disabled by default. Data Export stores the exact ZIP before processing, uses parser `instagram-saved-posts-json-v1`, and reports capture/export gaps without deletion inference. Only synthetic/redacted export compatibility has been verified.
+Implementation plan items 1–9 are implemented. The official account lane, own-media scheduler,
+authenticated Data Export lane, media-byte retention, blob deletion, re-resolution, and reprocessing
+mutation are disabled by default. Data Export stores the exact ZIP before processing, uses parser
+`instagram-saved-posts-json-v1`, and reports capture/export gaps without deletion inference. Only
+synthetic/redacted export and reprocessing compatibility has been verified.
 
 ## Intended toolchain
 
@@ -86,6 +90,32 @@ Data Export additionally requires `RATATOSKR__DATA_EXPORT__ENABLED=true`, absolu
 entry, path, ratio, poll, and batch limit is configured under the same prefix; defaults and exact
 HTTP/parser behavior are documented in `README.md`. Roots must be private and service-owned. Do not
 enable the lane until retention/access policy and owner-bound credentials are provisioned.
+
+Item-9 capabilities use four closed prefixes. `MEDIA_RETENTION` requires object bytes, owner bytes,
+and URL-lifetime ceilings; `BLOB_DELETION` requires poll, batch, and attempt ceilings;
+`RE_RESOLUTION` requires recency, item, request, response-byte, duration, concurrency, and provider
+call budgets; `REPROCESSING` requires a maximum item count per invocation. Each section stays
+disabled unless its `ENABLED=true` and every companion value is explicitly finite and nonzero.
+
+Parser reprocessing is an operator process mode, not HTTP:
+
+```bash
+ratatoskr-instagram-archive reprocess-export dry-run --owner UUID --run-id UUID --parser instagram-saved-posts-json-v1
+ratatoskr-instagram-archive reprocess-export apply --owner UUID --run-id UUID --parser instagram-saved-posts-json-v1 --operation-id UUID
+```
+
+Both modes write exactly one newline-terminated JSON report to stdout and diagnostics only to
+stderr. Exit codes are `0` success, `1` operational/integrity failure, `2` invalid grammar, and `78`
+invalid configuration. Apply requires `RATATOSKR__REPROCESSING__ENABLED=true`; dry-run remains
+read-only. Legacy monolith import is intentionally absent and belongs to fleet cutover.
+
+Roll out against a freshly created development database with all four item-9 flags off. Verify
+deletion/outbox/blob convergence and a reprocessing dry-run first, then enable one bounded worker or
+apply lane at a time while watching the closed lifecycle metrics. The Instagram outbox is the
+producer evidence boundary; Knowledge must independently prove consumption of deletion requests.
+Rollback disables the workers and CLI apply, leaving committed audit, outbox, checkpoint, and blob
+tasks intact for safe replay. There is no down migration: development databases are recreated from
+the single prior `schema.sql`, and parser rollback is another explicit supported reprocessing run.
 
 The deterministic hostile/property suite is part of `cargo test`. With local nightly and
 `cargo-fuzz`, run the additional bounded smoke as:

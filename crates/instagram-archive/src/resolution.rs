@@ -272,6 +272,10 @@ impl Database {
     /// provenance columns are immutable once written, and history is never
     /// rewritten.
     #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "raw evidence, revision, publication, and capture status form one auditable transaction"
+    )]
     async fn store_resolution(
         &self,
         capture_id: Uuid,
@@ -304,18 +308,23 @@ impl Database {
         .await
         .map_err(ResolutionError::Persistence)?;
 
+        let prior_projection: Option<(String, Option<String>)> = sqlx::query_as(
+            "select media_type, caption from instagram_archive.media where permalink = $1",
+        )
+        .bind(&permalink.url)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(ResolutionError::Persistence)?;
         let media_id = self
             .upsert_media_projection(&mut transaction, permalink, normalized, resolved_at)
             .await?;
 
-        // First preservation publishes `captured`; every later revision of the
-        // same source publishes `updated`. Counted before this transaction
-        // appends its own revision.
-        let (prior_count,): (i64,) = sqlx::query_as(
-            "select count(*) from instagram_archive.media_revisions r \
-             join instagram_archive.media m on m.media_id = r.media_id where m.permalink = $1",
+        let capture_has_fact: bool = sqlx::query_scalar(
+            "select exists(select 1 from instagram_archive.outbox_events \
+             where aggregate_type = 'capture' and aggregate_id = $1 \
+               and event_type in ('social.source.captured.v1', 'social.source.updated.v1'))",
         )
-        .bind(&permalink.url)
+        .bind(capture_id)
         .fetch_one(&mut *transaction)
         .await
         .map_err(ResolutionError::Persistence)?;
@@ -371,12 +380,19 @@ impl Database {
         .await
         .map_err(ResolutionError::Persistence)?;
 
-        let fact_kind = if prior_count == 0 {
-            crate::publishing::FactKind::Captured
-        } else {
-            crate::publishing::FactKind::Updated
-        };
-        crate::publishing::append_fact(&mut transaction, fact_kind, capture_id).await?;
+        let normalized_changed = prior_projection
+            .as_ref()
+            .is_none_or(|(media_type, caption)| {
+                media_type != normalized.media_type || caption != &normalized.caption
+            });
+        if !capture_has_fact || normalized_changed {
+            let fact_kind = if capture_has_fact {
+                crate::publishing::FactKind::Updated
+            } else {
+                crate::publishing::FactKind::Captured
+            };
+            crate::publishing::append_fact(&mut transaction, fact_kind, capture_id).await?;
+        }
 
         transaction
             .commit()

@@ -11,7 +11,7 @@ use ratatoskr_instagram_archive::Database;
 use ratatoskr_instagram_archive::test_support::{TestDatabase, admin_url};
 
 /// The relations README.md's planned data model declares, no more, no fewer.
-const DECLARED_TABLES: [&str; 28] = [
+const DECLARED_TABLES: [&str; 35] = [
     "accounts",
     "account_capabilities",
     "account_credential_audit",
@@ -28,7 +28,6 @@ const DECLARED_TABLES: [&str; 28] = [
     "own_media_sync_items",
     "own_media_authority",
     "captures",
-    "capture_tombstones",
     "capture_analysis_links",
     "capture_notes",
     "export_snapshots",
@@ -40,6 +39,14 @@ const DECLARED_TABLES: [&str; 28] = [
     "availability_observations",
     "outbox_events",
     "inbox_events",
+    "deletion_operations",
+    "deletion_effects",
+    "local_source_removals",
+    "blob_deletion_tasks",
+    "reresolution_runs",
+    "reresolution_items",
+    "export_reprocessing_runs",
+    "export_reprocessing_items",
 ];
 
 #[tokio::test]
@@ -296,6 +303,57 @@ async fn fresh_apply_creates_exactly_the_declared_relations() {
     assert_eq!(
         tables, declared,
         "the applied schema must match the declared inventory exactly"
+    );
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
+async fn lifecycle_schema_exposes_policy_deletion_reresolution_and_reprocessing_state() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+
+    let tables = archive_tables(pool).await;
+    let required = [
+        "blob_deletion_tasks",
+        "deletion_effects",
+        "deletion_operations",
+        "export_reprocessing_items",
+        "export_reprocessing_runs",
+        "local_source_removals",
+        "reresolution_items",
+        "reresolution_runs",
+    ];
+    let missing: Vec<&str> = required
+        .into_iter()
+        .filter(|required| !tables.iter().any(|table| table == required))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "item-9 lifecycle tables are missing: {missing:?}"
+    );
+
+    let media_columns: Vec<(String,)> = sqlx::query_as(
+        "select column_name from information_schema.columns \
+         where table_schema = 'instagram_archive' and table_name = 'media' \
+         and column_name = any($1) order by column_name",
+    )
+    .bind(vec![
+        "retention_class",
+        "retention_deadline",
+        "retention_reason",
+    ])
+    .fetch_all(pool)
+    .await
+    .expect("the media policy column query must answer");
+    assert_eq!(
+        media_columns,
+        vec![
+            ("retention_class".to_owned(),),
+            ("retention_deadline".to_owned(),),
+            ("retention_reason".to_owned(),),
+        ],
+        "media retention policy state must be explicit"
     );
 
     test.cleanup().await.expect("cleanup must drop");

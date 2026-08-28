@@ -23,6 +23,18 @@ OAuth credentials, professional account data, captures/notes, private/unavailabl
 - **Export media execution/expansion:** the raw ZIP is retained, but referenced media is never
   decoded, fetched, executed, or represented as a separately archived media BlobRef.
 - **Sensitive media leak:** owner authorization, protected BlobStore, safe events/logs, retention/deletion propagation.
+- **Unbounded or unauthorized media retention:** references are the default; byte archival requires
+  explicit action, rights and URL-lifetime evidence, HTTPS/type/size checks, finite object/owner
+  budgets, and digest verification before attachment. Shared digests are never deleted while any
+  database-wide reference remains.
+- **Incomplete privacy deletion or resurrection:** a closed owned-data/blob inventory, target lock,
+  atomic SQL/audit/local-removal/outbox/blob-task commit, idempotent replay, and Knowledge completion
+  guard cover capture and connection deletion. Audit/event payloads retain no content or credentials.
+- **Re-resolution budget escape or deletion race:** eligibility excludes permanent/private/old/not-due
+  state; owner and local-removal state plus every finite budget are rechecked immediately before I/O.
+- **Parser reprocessing destroys prior evidence:** exact receipt/parser registration, state and plan
+  fingerprints, read-only dry-run, bounded checkpoints, replay, and omission-as-retained-state prevent
+  destructive reinterpretation. Real-export compatibility remains unproved by synthetic fixtures.
 - **False authority:** typed acquisition/saved-authority fields and UI wording.
 - **Malicious captions/metadata:** untrusted data, output escaping, no instruction execution.
 - **Capability drift:** discovery records account type plus actual permission statuses and replaces a
@@ -41,4 +53,5 @@ OAuth credentials, professional account data, captures/notes, private/unavailabl
   a revoked capability generation even when remote revoke is unsupported or fails; startup scrubs
   accounts stranded in `revoking`.
 
-Re-review for messaging, comments/publishing, private media retrieval, automated downloads, or new account types.
+Re-review for messaging, comments/publishing, private media retrieval, broader automated downloads,
+legacy monolith import, or new account types.

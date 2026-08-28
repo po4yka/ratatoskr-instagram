@@ -94,8 +94,8 @@ async fn reconciliation_replay_is_idempotent_and_export_absence_is_non_destructi
     assert_export_fact_identities_use_provider_id(&test).await;
     let capture_state: (String, i64, i64) = sqlx::query_as(
         "select c.status,
-                (select count(*) from instagram_archive.capture_tombstones t
-                 where t.capture_id = c.capture_id),
+                (select count(*) from instagram_archive.local_source_removals r
+                 where r.capture_id = c.capture_id),
                 (select count(*) from instagram_archive.outbox_events o
                  where o.event_type = 'social.source.removed.v1')
          from instagram_archive.captures c where c.capture_id = $1",

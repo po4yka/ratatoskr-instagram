@@ -36,8 +36,9 @@ reauthorization required. The generation links to preserved raw permission evide
 this projection and must never reinterpret the originally requested scope as a grant.
 
 The scheduler requests only the connected professional account's non-ephemeral media edge. Stories
-and native Saved remain outside the matrix. Returned foreign-owner items are refused, and a provider
-media URL never becomes a BlobRef unless this service has actually stored and hashed those bytes.
+and native Saved remain outside the matrix. Returned foreign-owner items are refused. Provider
+media remains reference-only by default and becomes a BlobRef only after explicit policy admission,
+bounded storage, and digest verification; this never raises saved authority.
 
 Instagram provides Ratatoskr with no API that reads a personal account's native Saved list. No mode may synthesize that claim: an explicit capture proves the user saved the item to Ratatoskr at `captured_at`, an export proves it was saved at some point in the past, and neither proves current native membership. Deleting a Ratatoskr capture likewise never implies a native unsave.
 
@@ -73,7 +74,7 @@ Collapse mapping, enforced by `AvailabilityObservationKind::collapse_to_media_st
 
 `private` collapses to `unavailable`, never `deleted`: being denied access is evidence about access, not existence. Unsupported shapes and failed resolutions learned nothing, so they become `unknown` rather than inventing a state.
 
-Preservation is independent of every observation. `retention_after_observation` is identity on purpose: observing deletion upstream keeps whatever was captured before, absence from a later export deletes nothing, and demotion happens only through explicit user action. A metadata-only capture is never reported as a complete backup.
+Preservation is independent of every observation. `retention_after_observation` is identity on purpose: observing deletion upstream keeps whatever was captured before, absence from a later export deletes nothing, and demotion happens only through explicit owner deletion or an admitted retention expiry. A metadata-only capture is never reported as a complete backup. Connection deletion preserves independent explicit-capture and Data Export holdings; parser reprocessing preserves `data_export` / `export_observation` provenance and never upgrades it.
 
 ## Alignment review: `ratatoskr-social-contracts`
 
@@ -91,4 +92,4 @@ Gaps found and their disposition:
 
 1. Schema CHECKs lacked `public_resolution` while the contract grammar carries it — fixed in this change by widening `media_acquisition_method_check` and `captures_acquisition_method_check` in place.
 2. Contracts crate consumed as reviewed reference, not build dependency — deliberate until event publication (plan item 8) constructs real payloads; revisit then, ideally once the contracts repo decides how it publishes.
-3. Preservation state has no column yet — intentional until the media-handling plan item defines storage policy and budget; the type exists so the distinction precedes storage.
+3. Preservation state is now backed by constrained media reference/blob state and finite retention policy; byte archival remains disabled by default.

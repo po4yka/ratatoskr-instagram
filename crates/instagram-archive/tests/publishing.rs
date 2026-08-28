@@ -6,6 +6,9 @@
 //! The surface seam is replayed from committed fixtures; no test makes a live
 //! call. A missing database server is a failure, never a skip.
 
+#[path = "publishing/item9.rs"]
+mod item9;
+
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,6 +17,9 @@ use ratatoskr_event_envelope::EventEnvelope;
 use ratatoskr_identifiers::Extensions;
 use ratatoskr_instagram_archive::capture::{CaptureRequest, CaptureSubmission, ClientSource};
 use ratatoskr_instagram_archive::permalink::CanonicalPermalink;
+use ratatoskr_instagram_archive::privacy_deletion::{
+    DeletionRequest, DeletionStore, DeletionTarget,
+};
 use ratatoskr_instagram_archive::publishing::{
     EventTransport, FactKind, PublishError, TransportError, run_once, source_identity,
 };

@@ -121,11 +121,20 @@ async fn link_matching_capture(
     }
     let owner = completion.owner.user_id().0;
     let wanted_source = completion.social_source_id.to_string();
+    let privacy_removed: bool = sqlx::query_scalar(
+        "select exists(select 1 from instagram_archive.local_source_removals \
+         where user_ref = $1 and social_source_id::text = $2)",
+    )
+    .bind(owner)
+    .bind(&wanted_source)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if privacy_removed {
+        return Ok(AnalysisCompletionOutcome::Skipped);
+    }
     let candidates: Vec<(Uuid, String)> = sqlx::query_as(
         "select c.capture_id, c.canonical_url from instagram_archive.captures c \
-         where c.user_ref = $1 and c.media_id is not null and c.status <> 'tombstoned' \
-         and not exists (select 1 from instagram_archive.capture_tombstones t \
-                         where t.capture_id = c.capture_id)",
+         where c.user_ref = $1 and c.media_id is not null and c.status <> 'tombstoned'",
     )
     .bind(owner)
     .fetch_all(&mut *transaction)
