@@ -22,6 +22,14 @@ fn broker_lock() -> &'static tokio::sync::Mutex<()> {
 }
 
 #[expect(
+    clippy::disallowed_methods,
+    reason = "integration fixture selection uses an explicit test-only environment variable"
+)]
+fn actual_policy_fixture_configured() -> bool {
+    std::env::var("INSTAGRAM_ARCHIVE_TEST_NATS_NKEY_SEED_PATH").is_ok()
+}
+
+#[expect(
     clippy::expect_used,
     clippy::disallowed_methods,
     reason = "integration fixture: the explicitly configured broker is mandatory"
@@ -476,9 +484,16 @@ async fn ack_timeout_retains_identical_bytes() {
 #[tokio::test]
 async fn all_three_fact_types_use_exact_subjects() {
     let _guard = broker_lock().lock().await;
-    let broker = OpenBroker::start().await;
-    let client = broker.client.clone();
-    let stream = prepare_stream(client.clone()).await;
+    let local_broker = if actual_policy_fixture_configured() {
+        None
+    } else {
+        Some(OpenBroker::start().await)
+    };
+    let client = match local_broker.as_ref() {
+        Some(local) => local.client.clone(),
+        None => broker().await,
+    };
+    let stream = prepare_stream(admin_broker(client.clone()).await).await;
     let test = TestDatabase::create().await.expect("a fresh test database");
     let event_types = [
         "social.source.captured.v1",
@@ -486,8 +501,10 @@ async fn all_three_fact_types_use_exact_subjects() {
         "social.source.removed.v1",
     ];
     let mut expected = std::collections::BTreeMap::new();
+    let mut event_ids = Vec::with_capacity(event_types.len());
     for event_type in event_types {
-        let (_, body) = seed_event(&test, event_type).await;
+        let (event_id, body) = seed_event(&test, event_type).await;
+        event_ids.push(event_id);
         expected.insert(format!("evt.{event_type}"), body);
     }
     let transport = JetStreamTransport::new(client, Duration::from_secs(5));
@@ -498,6 +515,18 @@ async fn all_three_fact_types_use_exact_subjects() {
 
     assert_eq!(summary.delivered, 3, "all owned facts are acknowledged");
     assert_eq!(summary.failed, 0);
+    let (published_count,): (i64,) = sqlx::query_as(
+        "select count(*) from instagram_archive.outbox_events \
+         where event_id = any($1) and published_at is not null",
+    )
+    .bind(&event_ids)
+    .fetch_one(test.database.pool())
+    .await
+    .expect("the publication marks are readable");
+    assert_eq!(
+        published_count, 3,
+        "each row is marked only after its acknowledged delivery"
+    );
     let mut observed = std::collections::BTreeMap::new();
     for sequence in 1..=3 {
         let message = stream
@@ -519,29 +548,7 @@ async fn actual_platform_policy_denies_foreign_publish_and_direct_subscription()
     let _guard = broker_lock().lock().await;
     let publisher = broker().await;
     let admin = admin_broker(publisher.clone()).await;
-    let stream = prepare_stream(admin).await;
-
-    for (sequence, subject) in [
-        "evt.social.source.captured.v1",
-        "evt.social.source.updated.v1",
-        "evt.social.source.removed.v1",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        jetstream::new(publisher.clone())
-            .publish(subject, subject.as_bytes().to_vec().into())
-            .await
-            .expect("the Instagram identity sends its owned fact")
-            .await
-            .expect("the actual policy acknowledges its owned fact");
-        let message = stream
-            .get_raw_message(u64::try_from(sequence + 1).expect("the sequence is bounded"))
-            .await
-            .expect("the owned fact is persisted");
-        assert_eq!(message.subject.as_str(), subject);
-        assert_eq!(message.payload.as_ref(), subject.as_bytes());
-    }
+    prepare_stream(admin).await;
 
     let foreign = tokio::time::timeout(Duration::from_millis(500), async {
         let acknowledgement = jetstream::new(publisher.clone())
