@@ -53,7 +53,7 @@ pub struct Config {
     pub bus: Option<BusConfig>,
 }
 
-/// The broker identity used only by the command consumer.
+/// The broker identity shared by the command consumer and event publisher.
 #[derive(Debug, Clone, Serialize)]
 pub struct BusConfig {
     /// A credential-free `nats://` or `tls://` endpoint.
@@ -189,6 +189,8 @@ pub struct PublisherConfig {
     pub poll_interval_ms: u64,
     /// Maximum facts claimed per pass.
     pub batch_size: u32,
+    /// Maximum milliseconds allowed for publish plus persistence acknowledgement.
+    pub acknowledgement_timeout_ms: u64,
 }
 
 /// One configuration violation. The offending key and the rule it broke, and
@@ -283,13 +285,6 @@ impl Config {
         validate_own_media(&config, &mut violations);
         config.data_export.validate(&mut violations);
         item9::validate(&config, &mut violations);
-
-        if config.bus.as_ref().is_none_or(|bus| bus.url.is_empty()) {
-            violations.push(Violation {
-                key: "RATATOSKR__BUS__URL".to_owned(),
-                rule: "must configure the mandatory JetStream command-consumer endpoint",
-            });
-        }
 
         if violations.is_empty() {
             Ok(config)
@@ -621,6 +616,10 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
             Ok(parsed) => config.publisher.batch_size = parsed,
             Err(rule) => violations.push(refused(rule)),
         },
+        "RATATOSKR__PUBLISHER__ACKNOWLEDGEMENT_TIMEOUT_MS" => match parse_positive::<u64>(value) {
+            Ok(parsed) => config.publisher.acknowledgement_timeout_ms = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
         "RATATOSKR__OAUTH__ENABLED" => match value {
             "true" => config.oauth.enabled = true,
             "false" => config.oauth.enabled = false,
@@ -761,6 +760,7 @@ impl Default for Config {
             publisher: PublisherConfig {
                 poll_interval_ms: 1_000,
                 batch_size: 16,
+                acknowledgement_timeout_ms: 5_000,
             },
             oauth: OAuthConfig {
                 enabled: false,

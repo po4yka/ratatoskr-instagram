@@ -113,10 +113,10 @@ inbox_events
 
 Large export archives, media files, screenshots, raw API/oEmbed payloads, and unknown provider records are stored in the content-addressed BlobStore.
 
-## Browser command consumer
+## Broker consumer and event publisher
 
-The service requires `RATATOSKR__BUS__URL` and runs durable consumer
-`ratatoskr_instagram_browser_capture` on only
+When `RATATOSKR__BUS__URL` is configured, the service opens one authenticated connection and,
+before readiness, wires both durable consumer `ratatoskr_instagram_browser_capture` on only
 `cmd.instagram.capture.requested.v1`. It validates the canonical command envelope and closed
 Instagram provenance before writing the owned inbox and capture record. A configured broker that
 cannot authenticate, connect, or expose the preprovisioned
@@ -124,7 +124,31 @@ cannot authenticate, connect, or expose the preprovisioned
 provisions that fixed consumer; the deployment identity needs subscribe permission for that command
 subject and must not hold broad `$JS.API.>` permission.
 
-This lane preserves the capture but publishes no terminal operation outcome yet: no production
+The same connection publishes only `evt.social.source.captured.v1`,
+`evt.social.source.updated.v1`, and `evt.social.source.removed.v1`. The outbox sets `published_at`
+only after a finite-timeout JetStream persistence acknowledgement. Permission denial, timeout,
+invalid stored type, or row/envelope mismatch leaves the row unpublished and due for bounded retry;
+the envelope and event ID never change. With no bus configured, neither consumer nor publisher
+starts, `instagram_broker_delivery_enabled` is `0`, and durable outbox rows are untouched.
+
+### One-time logging-era repair
+
+The retired logging transport credited rows without an external carrier. At cutover, stop every old
+Instagram process, then run exactly:
+
+```sh
+RATATOSKR__STORAGE__DATABASE_URL=postgres://... \
+  ratatoskr-instagram-archive repair-logging-outbox \
+  --confirm logging-transport-never-delivered
+```
+
+The command prints only the repaired row count. It holds an advisory transaction lock and requeues
+only the three supported SocialSource fact types without changing event IDs, envelopes, or attempt
+history. A successful repeated run before startup must print `0`. Only then deploy and start the
+acknowledged publisher. Do not run the repair after the new publisher starts; that would create
+unnecessary idempotent redelivery of already acknowledged facts.
+
+The browser-command lane preserves the capture but publishes no terminal operation outcome yet: no production
 resolver-to-operation-report handoff exists, so unavailable and partial outcomes are never
 fabricated.
 

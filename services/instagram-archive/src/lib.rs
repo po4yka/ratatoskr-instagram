@@ -26,6 +26,8 @@ use serde::Serialize;
 
 /// The provider-specific JetStream delivery boundary.
 pub mod command_consumer;
+/// Acknowledged JetStream delivery for social-source outbox facts.
+pub mod outbox_transport;
 pub mod product;
 
 pub use product::{

@@ -32,6 +32,11 @@ audience-bound callback relay from Platform. Provider credentials remain local. 
 adapter calls only the connected account's versioned `/media` edge with a bearer header, fixed
 non-ephemeral fields, and an optional opaque continuation. Accepted completions append normalized
 `social.source.captured.v1` / `social.source.updated.v1` facts through the transactional outbox.
+`social.source.removed.v1` uses the same path. An outbox commit proves local durable intent;
+`published_at` proves only a JetStream persistence acknowledgement. Neither proves a downstream
+consumer acknowledgement, Knowledge indexing, live provider behavior, or deployment. The service
+uses a closed mapping to the exact `evt.social.source.{captured,updated,removed}.v1` subjects and
+refuses mismatched or unknown stored event types before broker I/O.
 
 ## Rules
 

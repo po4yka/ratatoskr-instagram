@@ -36,6 +36,8 @@ pub mod database;
 pub mod media_retention;
 /// Owner-bound OAuth begin and callback completion.
 pub mod oauth;
+/// Atomic stopped-service repair for logging-era outbox rows.
+pub mod outbox_repair;
 /// Capability-gated scheduled synchronization of connected-account own media.
 pub mod own_media;
 /// Canonicalization of client-delivered Instagram URLs into stable permalinks.

@@ -44,6 +44,7 @@ fn spawn_service(database_url: &str, admin_port: u16) -> Child {
     Command::new(BIN)
         .env("RATATOSKR__STORAGE__DATABASE_URL", database_url)
         .env("RATATOSKR__BUS__URL", test_nats_url())
+        .env("RATATOSKR__PUBLISHER__POLL_INTERVAL_MS", "25")
         .env(
             "RATATOSKR__ADMIN__LISTEN_ADDRESS",
             format!("127.0.0.1:{admin_port}"),
@@ -58,6 +59,72 @@ fn spawn_service(database_url: &str, admin_port: u16) -> Child {
         .expect("the service binary spawns")
 }
 
+#[expect(clippy::expect_used, reason = "boot-test helper; see spawn_service")]
+fn spawn_service_without_bus(database_url: &str, admin_port: u16) -> Child {
+    Command::new(BIN)
+        .env("RATATOSKR__STORAGE__DATABASE_URL", database_url)
+        .env_remove("RATATOSKR__BUS__URL")
+        .env_remove("RATATOSKR__BUS__NKEY_SEED_PATH")
+        .env("RATATOSKR__PUBLISHER__POLL_INTERVAL_MS", "25")
+        .env(
+            "RATATOSKR__ADMIN__LISTEN_ADDRESS",
+            format!("127.0.0.1:{admin_port}"),
+        )
+        .env(
+            "RATATOSKR__API__LISTEN_ADDRESS",
+            format!("127.0.0.1:{}", free_port()),
+        )
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the standalone service binary spawns")
+}
+
+fn wait_until_ready(port: u16) -> Option<u16> {
+    let deadline = Instant::now() + READY_TIMEOUT;
+    let mut ready_status = None;
+    while Instant::now() < deadline {
+        if let Some((status, _)) = http_get(port, "/health/ready") {
+            ready_status = Some(status);
+            if status == 200 {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    ready_status
+}
+
+#[expect(clippy::expect_used, reason = "boot fixture outbox setup must succeed")]
+async fn seed_outbox(test: &TestDatabase) -> uuid::Uuid {
+    let event_id = uuid::Uuid::now_v7();
+    let aggregate_id = uuid::Uuid::now_v7();
+    let owner = uuid::Uuid::now_v7();
+    let payload = serde_json::json!({
+        "event_id": event_id,
+        "event_type": "social.source.captured.v1",
+        "occurred_at": "1970-01-01T00:00:00Z",
+        "producer": "ratatoskr-instagram",
+        "aggregate_id": format!("social_source:{aggregate_id}"),
+        "correlation_id": format!("user:{owner}"),
+        "tenant_id": format!("user:{owner}"),
+        "schema_version": 1,
+        "payload": {}
+    });
+    sqlx::query(
+        "insert into instagram_archive.outbox_events \
+         (event_id, event_type, aggregate_type, aggregate_id, payload, occurred_at) \
+         values ($1, 'social.source.captured.v1', 'capture', $2, $3, now())",
+    )
+    .bind(event_id)
+    .bind(aggregate_id)
+    .bind(payload)
+    .execute(test.database.pool())
+    .await
+    .expect("the boot outbox row is seeded");
+    event_id
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn boots_serves_and_stops_cleanly_on_sigterm() {
@@ -69,17 +136,7 @@ async fn boots_serves_and_stops_cleanly_on_sigterm() {
     let mut child = spawn_service(&url, port);
 
     // Readiness arrives only after connect + schema apply + bind.
-    let deadline = Instant::now() + READY_TIMEOUT;
-    let mut ready_status = None;
-    while Instant::now() < deadline {
-        if let Some((status, _)) = http_get(port, "/health/ready") {
-            ready_status = Some(status);
-            if status == 200 {
-                break;
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    let ready_status = wait_until_ready(port);
     assert_eq!(
         ready_status,
         Some(200),
@@ -113,6 +170,92 @@ async fn boots_serves_and_stops_cleanly_on_sigterm() {
         "SIGTERM must produce a clean exit within the shutdown bound"
     );
 
+    test.cleanup().await.expect("cleanup drops");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn configured_bus_wires_consumer_and_publisher_before_readiness() {
+    let stream = preprovision_browser_capture_consumer().await;
+    let test = TestDatabase::create().await.expect("a prepared database");
+    let event_id = seed_outbox(&test).await;
+    let port = free_port();
+    let mut child = spawn_service(&test_url(test.name()), port);
+
+    assert_eq!(
+        wait_until_ready(port),
+        Some(200),
+        "startup must reach ready"
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let message = loop {
+        if let Ok(message) = stream.get_raw_message(1).await {
+            break message;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "readiness was exposed without a working publisher"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    assert_eq!(message.subject.as_str(), "evt.social.source.captured.v1");
+    let (_, metrics) = http_get(port, "/metrics").expect("configured metrics answer");
+    assert!(
+        metrics.contains("instagram_broker_delivery_enabled 1"),
+        "configured broker state must be explicit: {metrics}"
+    );
+    let (published_at,): (Option<time::OffsetDateTime>,) = sqlx::query_as(
+        "select published_at from instagram_archive.outbox_events where event_id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(test.database.pool())
+    .await
+    .expect("the publisher mark is readable");
+    assert!(published_at.is_some(), "the acknowledged row is marked");
+
+    send_sigterm(&child);
+    assert_eq!(
+        wait_with_timeout(&mut child, SHUTDOWN_TIMEOUT).expect("wait succeeds"),
+        Some(0)
+    );
+    test.cleanup().await.expect("cleanup drops");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn missing_bus_starts_no_success_transport_and_changes_no_outbox_row() {
+    let test = TestDatabase::create().await.expect("a prepared database");
+    let event_id = seed_outbox(&test).await;
+    let port = free_port();
+    let mut child = spawn_service_without_bus(&test_url(test.name()), port);
+
+    assert_eq!(
+        wait_until_ready(port),
+        Some(200),
+        "standalone startup must remain available"
+    );
+    let (_, metrics) = http_get(port, "/metrics").expect("standalone metrics answer");
+    assert!(
+        metrics.contains("instagram_broker_delivery_enabled 0"),
+        "disabled broker state must be explicit: {metrics}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (published_at, attempt_count): (Option<time::OffsetDateTime>, i32) = sqlx::query_as(
+        "select published_at, attempt_count \
+         from instagram_archive.outbox_events where event_id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(test.database.pool())
+    .await
+    .expect("the standalone outbox row remains readable");
+    assert!(published_at.is_none(), "no bus means no success transport");
+    assert_eq!(attempt_count, 0, "no publisher means no attempted delivery");
+
+    send_sigterm(&child);
+    assert_eq!(
+        wait_with_timeout(&mut child, SHUTDOWN_TIMEOUT).expect("wait succeeds"),
+        Some(0)
+    );
     test.cleanup().await.expect("cleanup drops");
 }
 
@@ -220,12 +363,19 @@ fn test_nats_url() -> String {
     clippy::expect_used,
     reason = "the isolated broker fixture is part of the boot contract"
 )]
-async fn preprovision_browser_capture_consumer() {
+async fn preprovision_browser_capture_consumer() -> jetstream::stream::Stream {
     let client = async_nats::connect(test_nats_url())
         .await
         .expect("the isolated broker connects");
     let context = jetstream::new(client);
-    let stream = context
+    let _ = context.delete_stream("ratatoskr_commands").await;
+    let _ = context
+        .delete_stream("ratatoskr_social_events_boot_test")
+        .await;
+    let _ = context
+        .delete_stream("ratatoskr_instagram_outbox_test")
+        .await;
+    let command_stream = context
         .create_stream(jetstream::stream::Config {
             name: "ratatoskr_commands".to_owned(),
             subjects: vec!["cmd.>".to_owned()],
@@ -233,7 +383,7 @@ async fn preprovision_browser_capture_consumer() {
         })
         .await
         .expect("the privileged fixture creates the command stream");
-    let _: jetstream::consumer::PullConsumer = stream
+    let _: jetstream::consumer::PullConsumer = command_stream
         .create_consumer(jetstream::consumer::pull::Config {
             durable_name: Some("ratatoskr_instagram_browser_capture".to_owned()),
             filter_subject: "cmd.instagram.capture.requested.v1".to_owned(),
@@ -242,4 +392,12 @@ async fn preprovision_browser_capture_consumer() {
         })
         .await
         .expect("the privileged fixture preprovisions the fixed durable");
+    context
+        .create_stream(jetstream::stream::Config {
+            name: "ratatoskr_social_events_boot_test".to_owned(),
+            subjects: vec!["evt.social.source.>".to_owned()],
+            ..jetstream::stream::Config::default()
+        })
+        .await
+        .expect("the privileged fixture creates the event stream")
 }

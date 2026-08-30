@@ -22,6 +22,7 @@ use ratatoskr_instagram_archive::privacy_deletion::{
 };
 use ratatoskr_instagram_archive::publishing::{
     EventTransport, FactKind, PublishError, TransportError, run_once, source_identity,
+    subject_for_event_type,
 };
 use ratatoskr_instagram_archive::resolution::{PublicSurface, ResolutionOutcome, SurfaceOutcome};
 use ratatoskr_instagram_archive::test_support::TestDatabase;
@@ -688,6 +689,208 @@ async fn note_never_reaches_the_wire() {
 // Transactionality and redelivery
 // ---------------------------------------------------------------------------
 
+#[test]
+fn supported_event_types_map_to_exact_subjects() {
+    assert_eq!(
+        subject_for_event_type("social.source.captured.v1"),
+        Some("evt.social.source.captured.v1")
+    );
+    assert_eq!(
+        subject_for_event_type("social.source.updated.v1"),
+        Some("evt.social.source.updated.v1")
+    );
+    assert_eq!(
+        subject_for_event_type("social.source.removed.v1"),
+        Some("evt.social.source.removed.v1")
+    );
+}
+
+/// A carrier that records calls and always acknowledges them.
+#[derive(Default)]
+struct RecordingTransport {
+    attempts: Mutex<Vec<(Uuid, String)>>,
+}
+
+impl EventTransport for RecordingTransport {
+    async fn deliver(
+        &self,
+        event_id: Uuid,
+        _event_type: &str,
+        envelope_json: &str,
+    ) -> Result<(), TransportError> {
+        let mut attempts = match self.attempts.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        attempts.push((event_id, envelope_json.to_owned()));
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn unknown_event_type_stays_unpublished() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let capture_id = submitted_capture(
+        &test.database,
+        Uuid::now_v7(),
+        ClientSource::IosShareExtension,
+    )
+    .await;
+    let surface = FakePublicSurface::answering(SurfaceOutcome::Payload {
+        body: REEL_FIXTURE.to_owned(),
+    });
+    resolve_once(&test, capture_id, &surface, OffsetDateTime::UNIX_EPOCH).await;
+    sqlx::query(
+        "update instagram_archive.outbox_events set event_type = 'social.source.foreign.v1'",
+    )
+    .execute(test.database.pool())
+    .await
+    .expect("the disposable outbox row is damaged");
+
+    let transport = RecordingTransport::default();
+    let summary = run_once(test.database.pool(), &transport, 8)
+        .await
+        .expect("the refusing pass completes");
+
+    assert_eq!(summary.delivered, 0, "an unknown type cannot be delivered");
+    assert_eq!(
+        summary.failed, 1,
+        "the corrupt row remains visible as failed"
+    );
+    assert!(
+        transport.attempts.lock().expect("attempts lock").is_empty(),
+        "invalid storage must be refused before the transport"
+    );
+    let (published_at,): (Option<OffsetDateTime>,) = sqlx::query_as(
+        "select published_at from instagram_archive.outbox_events where aggregate_id = $1",
+    )
+    .bind(capture_id)
+    .fetch_one(test.database.pool())
+    .await
+    .expect("the damaged row remains readable");
+    assert!(
+        published_at.is_none(),
+        "the invalid row must remain unpublished"
+    );
+    test.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn row_and_envelope_type_mismatch_stays_unpublished() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let capture_id = submitted_capture(
+        &test.database,
+        Uuid::now_v7(),
+        ClientSource::IosShareExtension,
+    )
+    .await;
+    let surface = FakePublicSurface::answering(SurfaceOutcome::Payload {
+        body: REEL_FIXTURE.to_owned(),
+    });
+    resolve_once(&test, capture_id, &surface, OffsetDateTime::UNIX_EPOCH).await;
+    let (event_id, original_payload): (Uuid, serde_json::Value) = sqlx::query_as(
+        "select event_id, payload from instagram_archive.outbox_events where aggregate_id = $1",
+    )
+    .bind(capture_id)
+    .fetch_one(test.database.pool())
+    .await
+    .expect("the original outbox row exists");
+    sqlx::query(
+        "update instagram_archive.outbox_events set event_type = 'social.source.updated.v1' \
+         where event_id = $1",
+    )
+    .bind(event_id)
+    .execute(test.database.pool())
+    .await
+    .expect("the disposable row type is damaged");
+
+    let transport = RecordingTransport::default();
+    let summary = run_once(test.database.pool(), &transport, 8)
+        .await
+        .expect("the refusing pass completes");
+
+    assert_eq!(
+        summary.delivered, 0,
+        "a mismatched type cannot be delivered"
+    );
+    assert_eq!(summary.failed, 1);
+    assert!(
+        transport.attempts.lock().expect("attempts lock").is_empty(),
+        "a mismatch must be refused before the transport"
+    );
+    let (stored_event_id, stored_payload, published_at): (
+        Uuid,
+        serde_json::Value,
+        Option<OffsetDateTime>,
+    ) = sqlx::query_as(
+        "select event_id, payload, published_at \
+         from instagram_archive.outbox_events where event_id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(test.database.pool())
+    .await
+    .expect("the mismatched row remains readable");
+    assert_eq!(stored_event_id, event_id, "identity must not change");
+    assert_eq!(stored_payload, original_payload, "payload must not change");
+    assert!(
+        published_at.is_none(),
+        "the mismatched row stays unpublished"
+    );
+    test.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn future_retry_is_not_claimed() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let capture_id = submitted_capture(
+        &test.database,
+        Uuid::now_v7(),
+        ClientSource::IosShareExtension,
+    )
+    .await;
+    let surface = FakePublicSurface::answering(SurfaceOutcome::Payload {
+        body: REEL_FIXTURE.to_owned(),
+    });
+    resolve_once(&test, capture_id, &surface, OffsetDateTime::UNIX_EPOCH).await;
+    let (event_id, original_payload): (Uuid, serde_json::Value) = sqlx::query_as(
+        "update instagram_archive.outbox_events \
+         set next_attempt_at = now() + interval '1 hour' \
+         where aggregate_id = $1 returning event_id, payload",
+    )
+    .bind(capture_id)
+    .fetch_one(test.database.pool())
+    .await
+    .expect("the retry is scheduled in the future");
+
+    let transport = RecordingTransport::default();
+    let summary = run_once(test.database.pool(), &transport, 8)
+        .await
+        .expect("the due-only pass completes");
+
+    assert_eq!(summary.delivered, 0, "a future retry is not due");
+    assert_eq!(summary.failed, 0, "a future retry was not attempted");
+    assert!(
+        transport.attempts.lock().expect("attempts lock").is_empty(),
+        "the transport must not see a future retry"
+    );
+    let (stored_event_id, stored_payload, published_at): (
+        Uuid,
+        serde_json::Value,
+        Option<OffsetDateTime>,
+    ) = sqlx::query_as(
+        "select event_id, payload, published_at \
+         from instagram_archive.outbox_events where event_id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(test.database.pool())
+    .await
+    .expect("the scheduled row remains readable");
+    assert_eq!(stored_event_id, event_id, "identity must not change");
+    assert_eq!(stored_payload, original_payload, "payload must not change");
+    assert!(published_at.is_none(), "the future retry stays unpublished");
+    test.cleanup().await.expect("cleanup");
+}
+
 #[tokio::test]
 async fn rollback_leaves_no_fact() {
     let test = TestDatabase::create().await.expect("a fresh test database");
@@ -725,7 +928,12 @@ struct FlakyTransport {
 }
 
 impl EventTransport for FlakyTransport {
-    async fn deliver(&self, event_id: Uuid, envelope_json: &str) -> Result<(), TransportError> {
+    async fn deliver(
+        &self,
+        event_id: Uuid,
+        _event_type: &str,
+        envelope_json: &str,
+    ) -> Result<(), TransportError> {
         // The attempt is logged before the outcome, so a failed attempt's
         // bytes are still comparable with the successful redelivery.
         let mut attempts = match self.attempts.lock() {
@@ -734,7 +942,7 @@ impl EventTransport for FlakyTransport {
         };
         attempts.push((event_id, envelope_json.to_owned()));
         if self.failures_first.fetch_sub(1, Ordering::SeqCst) > 1 {
-            return Err(TransportError("carrier down".to_owned()));
+            return Err(TransportError::Unavailable);
         }
         Ok(())
     }
@@ -767,6 +975,15 @@ async fn redelivery_is_byte_identical() {
         "nothing is marked published on failure"
     );
     assert_eq!(failed.failed, 1);
+
+    sqlx::query(
+        "update instagram_archive.outbox_events set next_attempt_at = now() \
+         where aggregate_id = $1",
+    )
+    .bind(capture_id)
+    .execute(test.database.pool())
+    .await
+    .expect("the test clock advances the persisted retry to due");
 
     let succeeded = run_once(test.database.pool(), &transport, 8)
         .await

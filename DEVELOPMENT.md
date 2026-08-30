@@ -124,13 +124,21 @@ The deterministic hostile/property suite is part of `cargo test`. With local nig
 build-gate -- cargo +nightly fuzz run data_export_archive -- -max_total_time=60
 ```
 
-Set mandatory `RATATOSKR__BUS__URL` to a credential-free `nats://` or `tls://` endpoint for the
-durable Instagram browser-capture consumer. In production also set
+Set `RATATOSKR__BUS__URL` to a credential-free `nats://` or `tls://` endpoint to enable both the
+durable Instagram browser-capture consumer and acknowledged SocialSource publisher. In production also set
 `RATATOSKR__BUS__NKEY_SEED_PATH` to the absolute path of the service nkey seed. The NATS role must
 subscribe to `cmd.instagram.capture.requested.v1` and acknowledge the preprovisioned durable
 consumer `ratatoskr_instagram_browser_capture`; Platform owns creation of the `ratatoskr_commands`
-stream and that consumer. The Instagram identity must not receive broad `$JS.API.>` permission.
-Inability to authenticate, connect, or obtain the fixed consumer aborts startup.
+stream and that consumer. It may publish only `evt.social.source.captured.v1`,
+`evt.social.source.updated.v1`, and `evt.social.source.removed.v1`; it must not receive broad
+`$JS.API.>` permission. Inability to authenticate, connect, or obtain the fixed consumer aborts
+configured-bus startup. Omitting the bus is explicit standalone mode: no broker task starts and no
+outbox row is attempted.
+
+Before the first deployment that replaces the retired logging transport, stop the old service and
+run `ratatoskr-instagram-archive repair-logging-outbox --confirm
+logging-transport-never-delivered` with the normal database URL. A successful repeat prints `0`;
+deploy and start the acknowledged publisher only after that check.
 
 ## Workflow
 

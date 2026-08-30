@@ -704,11 +704,42 @@ pub const OUTBOX_REDELIVERED_TOTAL: &str = "instagram_outbox_redelivered_total";
 /// Gauge of outbox rows still waiting for their first successful delivery.
 pub const OUTBOX_UNPUBLISHED_DEPTH: &str = "instagram_outbox_unpublished_depth";
 
-/// Why a delivery attempt could not complete. The message is safe for logs:
-/// it describes transport behaviour, never payload content.
+/// Returns the single broker subject owned by a supported social-source fact.
+#[must_use]
+pub const fn subject_for_event_type(event_type: &str) -> Option<&'static str> {
+    match event_type.as_bytes() {
+        b"social.source.captured.v1" => Some("evt.social.source.captured.v1"),
+        b"social.source.updated.v1" => Some("evt.social.source.updated.v1"),
+        b"social.source.removed.v1" => Some("evt.social.source.removed.v1"),
+        _ => None,
+    }
+}
+
+/// Why a delivery attempt could not complete.
 #[derive(Debug, thiserror::Error)]
-#[error("event delivery failed: {0}")]
-pub struct TransportError(pub String);
+pub enum TransportError {
+    /// The carrier was not reachable or stopped accepting work.
+    #[error("carrier unavailable")]
+    Unavailable,
+    /// The carrier rejected the publish operation or its acknowledgement.
+    #[error("publish rejected")]
+    Rejected,
+    /// The carrier did not acknowledge persistence inside the finite bound.
+    #[error("acknowledgement timeout")]
+    AcknowledgementTimeout,
+}
+
+impl TransportError {
+    /// Stable, content-free class suitable for logs and metrics.
+    #[must_use]
+    pub const fn class(&self) -> &'static str {
+        match self {
+            Self::Unavailable => "carrier_unavailable",
+            Self::Rejected => "publish_rejected",
+            Self::AcknowledgementTimeout => "acknowledgement_timeout",
+        }
+    }
+}
 
 /// The seam between the outbox and whatever carries facts to consumers.
 ///
@@ -716,7 +747,7 @@ pub struct TransportError(pub String);
 /// only marked published after `deliver` returns `Ok`, so a crash in between
 /// redelivers the identical stored bytes.
 pub trait EventTransport: Send + Sync {
-    /// Delivers one canonical envelope body.
+    /// Delivers one canonical envelope body under its validated stored type.
     ///
     /// # Errors
     ///
@@ -724,6 +755,7 @@ pub trait EventTransport: Send + Sync {
     fn deliver(
         &self,
         event_id: Uuid,
+        event_type: &str,
         envelope_json: &str,
     ) -> impl std::future::Future<Output = Result<(), TransportError>> + Send;
 }
@@ -756,21 +788,37 @@ pub async fn run_once<T: EventTransport>(
 ) -> Result<PassSummary, sqlx::Error> {
     let mut summary = PassSummary::default();
 
-    let rows: Vec<(Uuid, serde_json::Value, i32)> = sqlx::query_as(
-        "select event_id, payload, attempt_count from instagram_archive.outbox_events \
-         where published_at is null order by event_id limit $1",
+    let rows: Vec<(Uuid, String, serde_json::Value, i32)> = sqlx::query_as(
+        "select event_id, event_type, payload, attempt_count \
+         from instagram_archive.outbox_events \
+         where published_at is null \
+           and (next_attempt_at is null or next_attempt_at <= now()) \
+         order by coalesce(next_attempt_at, '-infinity'::timestamptz), event_id limit $1",
     )
     .bind(i32::try_from(batch).unwrap_or(i32::MAX))
     .fetch_all(pool)
     .await?;
 
-    for (event_id, payload_value, attempt_count) in rows {
+    for (event_id, event_type, payload_value, attempt_count) in rows {
         let body = serde_json::to_string(&payload_value)
             .map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
         if attempt_count > 0 {
             metrics::counter!(OUTBOX_REDELIVERED_TOTAL).increment(1);
         }
-        match transport.deliver(event_id, &body).await {
+        let validation_error = match subject_for_event_type(&event_type) {
+            None => Some("unsupported_event_type"),
+            Some(_) => match EventEnvelope::from_json(body.as_bytes()) {
+                Ok(envelope) if envelope.event_type.to_string() == event_type => None,
+                Ok(_) => Some("event_type_mismatch"),
+                Err(_) => Some("invalid_envelope"),
+            },
+        };
+        if let Some(error_class) = validation_error {
+            record_delivery_failure(pool, event_id, error_class).await?;
+            summary.failed += 1;
+            continue;
+        }
+        match transport.deliver(event_id, &event_type, &body).await {
             Ok(()) => {
                 sqlx::query(
                     "update instagram_archive.outbox_events \
@@ -784,17 +832,7 @@ pub async fn run_once<T: EventTransport>(
                 summary.delivered += 1;
             }
             Err(error) => {
-                tracing::warn!(event = %event_id, reason = %error, "outbox delivery failed");
-                sqlx::query(
-                    "update instagram_archive.outbox_events \
-                     set attempt_count = attempt_count + 1, \
-                         next_attempt_at = now() + interval '60 seconds' \
-                     where event_id = $1",
-                )
-                .bind(event_id)
-                .execute(pool)
-                .await?;
-                metrics::counter!(OUTBOX_FAILED_TOTAL).increment(1);
+                record_delivery_failure(pool, event_id, error.class()).await?;
                 summary.failed += 1;
             }
         }
@@ -810,4 +848,23 @@ pub async fn run_once<T: EventTransport>(
     metrics::gauge!(OUTBOX_UNPUBLISHED_DEPTH, "producer" => PRODUCER_NAME).set(depth);
 
     Ok(summary)
+}
+
+async fn record_delivery_failure(
+    pool: &sqlx::PgPool,
+    event_id: Uuid,
+    error_class: &'static str,
+) -> Result<(), sqlx::Error> {
+    tracing::warn!(event = %event_id, error_class, "outbox delivery failed");
+    sqlx::query(
+        "update instagram_archive.outbox_events \
+         set attempt_count = attempt_count + 1, \
+             next_attempt_at = now() + interval '60 seconds' \
+         where event_id = $1 and published_at is null",
+    )
+    .bind(event_id)
+    .execute(pool)
+    .await?;
+    metrics::counter!(OUTBOX_FAILED_TOTAL).increment(1);
+    Ok(())
 }

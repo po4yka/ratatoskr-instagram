@@ -5,11 +5,11 @@ use secrecy::ExposeSecret as _;
 use ratatoskr_instagram_archive::{Config, StorageConfig};
 
 #[test]
-fn missing_bus_configuration_is_refused() {
-    let error = Config::from_environment(Vec::<(String, String)>::new())
-        .expect_err("a service that owns a command consumer needs a broker endpoint");
+fn missing_bus_configuration_is_explicit_standalone_mode() {
+    let config = Config::from_environment(Vec::<(String, String)>::new())
+        .expect("a standalone service keeps the durable outbox without a broker");
 
-    assert!(error.to_string().contains("RATATOSKR__BUS__URL"));
+    assert!(config.bus.is_none());
 }
 
 #[test]
