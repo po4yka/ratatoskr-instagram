@@ -1,5 +1,6 @@
 //! Budgeted and privacy-safe public re-resolution job tests.
 
+use time::macros::datetime;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
@@ -15,7 +16,7 @@ use ratatoskr_instagram_archive::test_support::TestDatabase;
 
 #[test]
 fn selection_admits_only_due_recent_live_transient_or_resolved_captures() {
-    let now = OffsetDateTime::now_utc();
+    let now = datetime!(2026-08-17 10:30:00 UTC);
     let resolved = Uuid::from_u128(1);
     let transient = Uuid::from_u128(2);
     let failed = Uuid::from_u128(3);
@@ -111,7 +112,7 @@ async fn deletion_between_selection_and_claim_prevents_request_and_resurrection(
         })
         .await
         .expect("privacy deletion wins race");
-    let now = OffsetDateTime::now_utc();
+    let now = datetime!(2026-08-17 10:30:00 UTC);
     let mut budget = available_budget(now);
     let before = budget;
     let mut resolver_calls = 0_u32;
@@ -179,7 +180,7 @@ fn available_budget(now: OffsetDateTime) -> ReResolutionBudget {
 
 #[test]
 fn request_never_starts_when_any_run_or_provider_budget_guard_is_exhausted() {
-    let now = OffsetDateTime::now_utc();
+    let now = datetime!(2026-08-17 10:30:00 UTC);
     let cases = [
         (
             ReResolutionSkipReason::ItemBudget,
