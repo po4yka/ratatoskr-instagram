@@ -16,6 +16,7 @@ metrics-exporter-prometheus.workspace = true
 ratatoskr-error-contracts.workspace = true
 ratatoskr-event-envelope.workspace = true
 ratatoskr-identifiers.workspace = true
+ratatoskr-operation-contracts.workspace = true
 ratatoskr-social-contracts.workspace = true
 rand.workspace = true
 reqwest.workspace = true
