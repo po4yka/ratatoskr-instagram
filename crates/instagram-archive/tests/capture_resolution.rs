@@ -66,7 +66,7 @@ fn payload() -> SurfaceOutcome {
 
 /// The base instant of a test, safely after the intake clock (`next_resolution_at = now()`).
 fn base() -> OffsetDateTime {
-    OffsetDateTime::now_utc() + Duration::minutes(1)
+    OffsetDateTime::now_utc() + Duration::minutes(1) // wall-clock: intake stamps next_resolution_at with the database now()
 }
 
 fn command(sequence: u8, permalink: &str) -> Vec<u8> {

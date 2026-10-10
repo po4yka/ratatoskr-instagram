@@ -166,7 +166,7 @@ async fn a_platform_command_ends_in_queued_captured_and_succeeded_events() {
     let resolved = CaptureResolver::new(test.database.clone())
         .run_due_once(
             &FixtureSurface,
-            OffsetDateTime::now_utc() + time::Duration::minutes(1),
+            OffsetDateTime::now_utc() + time::Duration::minutes(1), // wall-clock: intake stamps next_resolution_at with the database now()
             policy,
         )
         .await
