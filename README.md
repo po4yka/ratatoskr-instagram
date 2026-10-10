@@ -124,9 +124,54 @@ cannot authenticate, connect, or expose the preprovisioned
 provisions that fixed consumer; the deployment identity needs subscribe permission for that command
 subject and must not hold broad `$JS.API.>` permission.
 
-This lane preserves the capture but publishes no terminal operation outcome yet: no production
-resolver-to-operation-report handoff exists, so unavailable and partial outcomes are never
-fabricated.
+### Operation lifecycle (XR-021 CONTRACTS.md S10 CD1, CD2, CD7)
+
+Platform's `accepted` operation reaches a terminal state through three steps, all owned here:
+
+1. **Intake.** In the transaction that holds the inbox claim the service stores the capture, one
+   `capture_operations` row per Platform operation (a capture dedupes on `(user_ref,
+   canonical_url)`, so one capture can carry several operations), and a `queued`
+   `platform.operation.reported.v1` in the outbox. A permalink the service cannot map still gets
+   a terminal `failed` / `social.source.unavailable` (not retryable) report instead of a silent
+   acknowledgement. A new explicit capture of a capture that concluded as `unavailable` reopens
+   it with zero attempts, because a deleted or private post needs a new acquisition.
+2. **Resolution.** A separate worker claims captures that carry an unreported operation and fetch
+   them over Meta's `instagram_oembed`. A transient failure (HTTP 401, 429, 5xx, timeout,
+   connection error) reschedules the capture after 30 s, 2 min, 8 min and 30 min; the fifth
+   transient failure concludes it as `temporarily_unavailable`. Permanent answers conclude
+   immediately: 404 is `deleted`, 403 `private`, 400 `unsupported`.
+3. **Terminal report.** Every operation of a concluded capture gets exactly one terminal report:
+   `succeeded` with a `social.post` result pointing at the preserved source, or `failed` with
+   `social.source.deleted` (deleted), `social.source.unavailable` not retryable (private,
+   unsupported, unparseable payload) or `social.source.unavailable` retryable (retries spent).
+   `capture_operations.reported_at` is set in the same statement that inserts the report, so a
+   redelivery or a crash between resolution and reporting only reports and never fetches again.
+
+The outbox relay publishes the stored envelopes to JetStream (`evt.platform.operation.reported.v1`,
+`evt.social.source.captured.v1`, `.updated.v1`, `.removed.v1`) under the event id as
+`Nats-Msg-Id`, and marks a row published only after the broker acknowledged it. A denied publish
+is invisible to the client and surfaces as a missing acknowledgement: check the NATS server log
+for a `Publish Violation`. If the relay, the consumer or the resolver stops, the process flips
+readiness and exits non-zero.
+
+### Public resolution configuration
+
+The service refuses to start (exit 78) with a bus and no resolution surface, because it would
+report ready while captures can never complete.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH` | required with the bus | absolute path of the file holding the Meta app access token; read once at startup, never logged |
+| `RATATOSKR__PUBLIC_RESOLUTION__ENDPOINT` | `https://graph.facebook.com/v25.0/instagram_oembed` | https only, host `graph.facebook.com` or `graph.instagram.com`, no credentials or query |
+| `RATATOSKR__PUBLIC_RESOLUTION__MAX_ATTEMPTS` | `5` | attempts before a transient failure is terminal (1 to 10) |
+| `RATATOSKR__PUBLIC_RESOLUTION__BATCH_SIZE` | `8` | captures claimed per pass (1 to 100) |
+| `RATATOSKR__PUBLIC_RESOLUTION__POLL_INTERVAL_MS` | `2000` | pause between passes (100 to 60000) |
+
+The request is `GET <endpoint>?url=<canonical permalink>&access_token=<token>` with redirects
+disabled, a 3 s connect and 10 s total timeout and a 256 KiB body cap. The status table lives in
+one function, `public_surface::classify_response`, and is a starting point taken from Meta's
+documentation (which lists no error codes for this endpoint); correct it against recorded live
+responses.
 
 ## Capture API flow
 

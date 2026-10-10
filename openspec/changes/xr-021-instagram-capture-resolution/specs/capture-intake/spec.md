@@ -18,3 +18,17 @@ The service SHALL record the Platform operation named by an accepted browser cap
 
 - **WHEN** a command with another operation id names a permalink the owner already captured
 - **THEN** a second operation row binds to the same capture, and an `unavailable` capture returns to `accepted` with zero attempts
+
+### Requirement: An attributable command with an unmappable permalink gets a terminal report
+
+A command that names an operation and an owner but a permalink this service cannot map SHALL be answered with a terminal `failed` report with code `social.source.unavailable`, not retryable, in the transaction that holds its inbox claim, instead of being acknowledged silently (XR-021 CONTRACTS.md S10 CD2). The report aggregates on the operation because no capture exists.
+
+#### Scenario: An unmappable permalink is reported inaccessible
+
+- **WHEN** a command with a valid envelope, operation id and tenant names `https://www.instagram.com/example`
+- **THEN** exactly one terminal failed report exists for the operation, no capture exists, and a redelivery adds nothing
+
+#### Scenario: A storage fault is not a rejection
+
+- **WHEN** the capture cannot be stored because the database fails
+- **THEN** the delivery is retried, its inbox claim is rolled back, and no report exists

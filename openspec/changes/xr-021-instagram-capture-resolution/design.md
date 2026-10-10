@@ -28,6 +28,20 @@ The access token travels as the documented `access_token` query parameter. Meta'
 
 `NatsEventTransport` publishes to `evt.<event_type>` for a closed list of four types, with `Nats-Msg-Id` equal to the event id, and returns `Ok` only after the JetStream acknowledgement. An unlisted type is a `TransportError`, and the schema CHECK makes it impossible to insert one. The outbox pass selects `published_at is null and (next_attempt_at is null or next_attempt_at <= now())` ordered by `occurred_at, event_id`. The service shares one NATS client between the command consumer and the transport. The publisher starts only when a bus is configured. Any bus task that returns before an orderly shutdown flips readiness and ends the process with a non-zero code.
 
+### Smaller decisions recorded while building
+
+- The outbox row id is the envelope `event_id` for every fact and report (a helper reads it back from the stored envelope), so the relay's `Nats-Msg-Id` equals the id inside the envelope (S02 rule 1). The transport refuses an envelope whose id differs from its row.
+- A report with no capture (the unmappable permalink) aggregates on `operation:<id>` and the outbox accepts the aggregate type `operation` for it.
+- `capture_operations.capture_id` cascades on delete so the existing capture privacy deletion keeps working; erasure bookkeeping for the table itself stays out of scope.
+- A capture with status `failed` or `tombstoned` that still carries an unreported operation is reported inaccessible without a fetch; only `unavailable` is reopened by a new explicit capture (S10 CD7).
+- When the retry budget is spent the capture is concluded as `temporarily_unavailable` whether the last attempt was a provider answer or a transport failure, because five unreachable attempts over about 40 minutes prove exactly that, and the stored observation then drives a consistent `retryable` report after a crash.
+- `SurfaceOutcome::Unavailable` (an unproven cause, for example a 200 body that is not an object) is permanent and reported inaccessible.
+- The default endpoint is the version Meta's current documentation shows (`v25.0`); CONTRACTS.md names `v23.0` as an example default and the endpoint is configurable.
+- The access token is read from its file by the process at startup (and by `check-config`), so the configuration tests need no files and a missing or empty file exits 78.
+- The failure text of a refused publish names the broker log (`Publish Violation`) because a denied publish is indistinguishable from a timeout.
+- Command deliveries are negatively acknowledged with a 2 s delay when transient and terminated (`Term`) when permanently invalid (S02 rule 7).
+- `Config` makes the bus mandatory today, so the "no bus" branch of the startup is defensive: it starts nothing and warns.
+
 ## Risks
 
 - The classifier status table is a starting point from documentation, not recorded live fixtures. It is isolated in one function.

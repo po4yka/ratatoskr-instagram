@@ -134,6 +134,17 @@ consumer `ratatoskr_instagram_browser_capture`; Platform owns creation of the `r
 stream and that consumer. The Instagram identity must not receive broad `$JS.API.>` permission.
 Inability to authenticate, connect, or obtain the fixed consumer aborts startup.
 
+A configured bus also requires the public-resolution surface: set
+`RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH` to the absolute path of the file holding the Meta
+app access token (exit 78 otherwise; `check-config` reads the file too). The same identity must be
+allowed to publish `evt.platform.operation.reported.v1` and
+`evt.social.source.{captured,updated,removed}.v1`; a denied publish is silent for the client, so a
+stuck outbox means: check the NATS server log for a `Publish Violation`. Without a bus nothing
+publishes and outbox rows stay unpublished (they are never marked delivered). If the command
+consumer, the outbox relay or the capture resolver stops, readiness fails and the process exits
+non-zero. `tests/browser_capture_e2e.rs` runs one permalink through the real consumer, the
+resolver (over a fake surface) and the JetStream relay against the isolated NATS fixture.
+
 ## Workflow
 
 1. Verify the capability exists for the connected account type and current granted scopes.
