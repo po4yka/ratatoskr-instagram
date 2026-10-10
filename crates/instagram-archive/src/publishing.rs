@@ -233,7 +233,7 @@ pub async fn append_own_media_facts(
                 instant_from_time(captured_at, media_id)?,
             )?
         };
-        let event_id = Uuid::now_v7();
+        let event_id = envelope_event_id(&payload_value)?;
         let result = sqlx::query(
             "insert into instagram_archive.outbox_events
              (event_id, event_type, aggregate_type, aggregate_id, payload,
@@ -358,7 +358,7 @@ pub async fn append_fact(
         )?
     };
 
-    let event_id = Uuid::now_v7();
+    let event_id = envelope_event_id(&payload_value)?;
     sqlx::query(
         "insert into instagram_archive.outbox_events \
          (event_id, event_type, aggregate_type, aggregate_id, payload, correlation_id, \
@@ -375,6 +375,21 @@ pub async fn append_fact(
     .execute(&mut *transaction)
     .await?;
     Ok(event_id)
+}
+
+/// The id the envelope carries, which is also the outbox row id and the `Nats-Msg-Id` the relay
+/// publishes under (XR-021 CONTRACTS.md S02 rule 1).
+pub(crate) fn envelope_event_id(envelope: &serde_json::Value) -> Result<Uuid, PublishError> {
+    envelope
+        .get("event_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+        .ok_or_else(|| {
+            PublishError::ContractViolation(
+                Uuid::nil(),
+                "the envelope carries no event id".to_owned(),
+            )
+        })
 }
 
 /// Wraps one payload into its complete canonical envelope as JSON. The
@@ -497,7 +512,7 @@ pub(crate) async fn append_source_removal_fact(
         extensions: Extensions::default(),
     };
     let payload_value = envelope_value_at(&payload, &source_uuid, &owner_value, removed_at)?;
-    let event_id = Uuid::now_v7();
+    let event_id = envelope_event_id(&payload_value)?;
     sqlx::query(
         "insert into instagram_archive.outbox_events \
          (event_id, event_type, aggregate_type, aggregate_id, payload, correlation_id, \
@@ -706,6 +721,9 @@ pub const OUTBOX_REDELIVERED_TOTAL: &str = "instagram_outbox_redelivered_total";
 /// Gauge of outbox rows still waiting for their first successful delivery.
 pub const OUTBOX_UNPUBLISHED_DEPTH: &str = "instagram_outbox_unpublished_depth";
 
+/// The longest `last_error` kept on a failed outbox row, in characters.
+const LAST_ERROR_CHARS: usize = 200;
+
 /// Why a delivery attempt could not complete. The message is safe for logs:
 /// it describes transport behaviour, never payload content.
 #[derive(Debug, thiserror::Error)]
@@ -743,6 +761,9 @@ pub struct PassSummary {
 
 /// Runs exactly one claiming pass: oldest first, bounded by `batch`.
 ///
+/// A row whose delivery failed waits out its `next_attempt_at` backoff and is not selected
+/// again until it is due, so a failing head row cannot starve the rows behind it.
+///
 /// Delivery happens outside any transaction; only the mark or the failure
 /// bookkeeping touches storage afterwards, so a slow carrier never holds row
 /// locks and a crash between delivery and marking yields a byte-identical
@@ -760,7 +781,9 @@ pub async fn run_once<T: EventTransport>(
 
     let rows: Vec<(Uuid, serde_json::Value, i32)> = sqlx::query_as(
         "select event_id, payload, attempt_count from instagram_archive.outbox_events \
-         where published_at is null order by event_id limit $1",
+         where published_at is null \
+           and (next_attempt_at is null or next_attempt_at <= now()) \
+         order by occurred_at, event_id limit $1",
     )
     .bind(i32::try_from(batch).unwrap_or(i32::MAX))
     .fetch_all(pool)
@@ -790,10 +813,12 @@ pub async fn run_once<T: EventTransport>(
                 sqlx::query(
                     "update instagram_archive.outbox_events \
                      set attempt_count = attempt_count + 1, \
-                         next_attempt_at = now() + interval '60 seconds' \
+                         next_attempt_at = now() + interval '60 seconds', \
+                         last_error = $2 \
                      where event_id = $1",
                 )
                 .bind(event_id)
+                .bind(error.0.chars().take(LAST_ERROR_CHARS).collect::<String>())
                 .execute(pool)
                 .await?;
                 metrics::counter!(OUTBOX_FAILED_TOTAL).increment(1);

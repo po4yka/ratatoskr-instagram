@@ -768,6 +768,12 @@ async fn redelivery_is_byte_identical() {
     );
     assert_eq!(failed.failed, 1);
 
+    // The failed row waits out its backoff (XR-021 CONTRACTS.md S02 rule 3); let it elapse.
+    sqlx::query("update instagram_archive.outbox_events set next_attempt_at = now()")
+        .execute(test.database.pool())
+        .await
+        .expect("the backoff is elapsed");
+
     let succeeded = run_once(test.database.pool(), &transport, 8)
         .await
         .expect("the recovering pass completes");

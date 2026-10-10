@@ -26,6 +26,8 @@ use serde::Serialize;
 
 /// The provider-specific JetStream delivery boundary.
 pub mod command_consumer;
+/// The `JetStream` carrier behind the outbox seam.
+pub mod nats_transport;
 pub mod product;
 
 pub use product::{
@@ -40,6 +42,13 @@ const DATABASE_UP: u8 = 1;
 /// The last probe did not answer.
 const DATABASE_DOWN: u8 = 2;
 
+/// No broker lane is tracked by this process.
+const BUS_ABSENT: u8 = 0;
+/// The broker lane's tasks are running.
+const BUS_UP: u8 = 1;
+/// A broker lane task ended before an orderly shutdown.
+const BUS_DOWN: u8 = 2;
+
 /// The deployable role this process serves, one of one.
 pub const ROLE: &str = "archive";
 
@@ -53,6 +62,7 @@ pub struct RuntimeState {
     startup_complete: AtomicBool,
     draining: AtomicBool,
     database: AtomicU8,
+    bus: AtomicU8,
 }
 
 impl RuntimeState {
@@ -63,6 +73,7 @@ impl RuntimeState {
             startup_complete: AtomicBool::new(false),
             draining: AtomicBool::new(false),
             database: AtomicU8::new(DATABASE_ABSENT),
+            bus: AtomicU8::new(BUS_ABSENT),
         }
     }
 
@@ -94,10 +105,23 @@ impl RuntimeState {
         );
     }
 
+    /// The broker lane (command consumer, outbox relay, capture resolver) is running.
+    pub fn set_bus_running(&self) {
+        self.bus.store(BUS_UP, Ordering::Release);
+    }
+
+    /// A broker lane task ended before an orderly shutdown. Readiness fails for good: a process
+    /// that can no longer finish captures must not look ready.
+    pub fn set_bus_failed(&self) {
+        self.bus.store(BUS_DOWN, Ordering::Release);
+    }
+
     /// Whether new work may be routed to this process.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.startup_complete.load(Ordering::Acquire) && !self.draining.load(Ordering::Acquire)
+        self.startup_complete.load(Ordering::Acquire)
+            && !self.draining.load(Ordering::Acquire)
+            && self.bus.load(Ordering::Acquire) != BUS_DOWN
     }
 
     /// The readiness checks, sorted by name so two consecutive bodies are
@@ -127,6 +151,15 @@ impl RuntimeState {
             let up = self.database.load(Ordering::Acquire) == DATABASE_UP;
             checks.push(Check {
                 name: CheckName::Database,
+                state: pass(up),
+                reason: (!up).then_some(CheckReason::DependencyUnavailable),
+            });
+        }
+
+        if self.bus.load(Ordering::Acquire) != BUS_ABSENT {
+            let up = self.bus.load(Ordering::Acquire) == BUS_UP;
+            checks.push(Check {
+                name: CheckName::Bus,
                 state: pass(up),
                 reason: (!up).then_some(CheckReason::DependencyUnavailable),
             });
@@ -169,6 +202,8 @@ pub struct Check {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum CheckName {
+    /// The broker lane's tasks are running. Present only when one is tracked.
+    Bus,
     /// The database answers. Present only when one is configured.
     Database,
     /// No shutdown signal has arrived.

@@ -12,8 +12,9 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use super::{
-    FactKind, PublishError, SOCIAL_PLATFORM, envelope_value_at, instant_from_time,
-    own_media_source_identity, owner_ref, parse_source_id, text_violation, violation,
+    FactKind, PublishError, SOCIAL_PLATFORM, envelope_event_id, envelope_value_at,
+    instant_from_time, own_media_source_identity, owner_ref, parse_source_id, text_violation,
+    violation,
 };
 
 /// Appends one owner-scoped observation unless the exact normalized digest
@@ -110,7 +111,7 @@ pub(crate) async fn append_fact(
             occurred_at,
         )?
     };
-    let event_id = Uuid::now_v7();
+    let event_id = envelope_event_id(&payload_value)?;
     let inserted = sqlx::query(
         "insert into instagram_archive.outbox_events
          (event_id, event_type, aggregate_type, aggregate_id, payload,

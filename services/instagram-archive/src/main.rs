@@ -8,6 +8,10 @@
 //! bind both listeners (operator and product), mark readiness — then serve
 //! until SIGTERM or SIGINT and drain within the configured bound.
 //!
+//! After the listeners bind, the broker lane (command consumer, outbox relay, capture resolver)
+//! runs under a supervisor; if any of its tasks ends, readiness flips and the process exits
+//! non-zero.
+//!
 //! Exit codes: `0` clean run; `1` runtime failure; `2` invalid command
 //! grammar; `78` (`EX_CONFIG`) configuration unreadable or invalid.
 
@@ -16,22 +20,19 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_nats::jetstream;
-use futures_util::StreamExt as _;
 use secrecy::ExposeSecret as _;
 
 use ratatoskr_instagram_archive::data_export::DataExportWorker;
 use ratatoskr_instagram_archive::provider::{
     REFRESH_SUPPORTED, ReqwestInstagramProvider, ReqwestOAuthCodeRelay,
 };
-use ratatoskr_instagram_archive::publishing::TransportError;
 use ratatoskr_instagram_archive::telemetry::SERVICE_NAME;
-use ratatoskr_instagram_archive::{BusConfig, Config, Database, PublisherConfig};
+use ratatoskr_instagram_archive::{Config, Database};
 use ratatoskr_instagram_archive_service::{
     DataExportRuntime, OfficialAccountRuntime, RuntimeState,
 };
-use uuid::Uuid;
 
+mod bus;
 mod reprocess_export;
 
 /// How often the prober copies the database answer into the readiness facts.
@@ -61,6 +62,12 @@ fn main() -> ExitCode {
 fn check_config() -> ExitCode {
     match Config::load() {
         Ok(config) => {
+            // The token file is part of the configuration: a missing or empty file is as fatal
+            // at startup as a missing key, so it is reported here instead of at the first boot.
+            if let Err(error) = config.public_resolution.load_access_token() {
+                eprintln!("{SERVICE_NAME}: {error}");
+                return ExitCode::from(78);
+            }
             eprintln!("{SERVICE_NAME}: configuration is valid.\n{config:#?}");
             ExitCode::SUCCESS
         }
@@ -134,7 +141,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
         ExitCode::from(78)
     })?;
 
-    let command_consumer = start_command_consumer(&config, database.clone()).await?;
+    let bus_lane = prepare_bus_lane(&config).await?;
 
     let runtime = Arc::new(RuntimeState::new());
     let admin_listener = tokio::net::TcpListener::bind(config.admin.listen_address)
@@ -161,9 +168,18 @@ async fn tokio_main() -> Result<(), ExitCode> {
     // The first probe happens before readiness flips, so the process never
     // reports itself ready over an unverified dependency.
     let prober = spawn_database_prober(database.clone(), Arc::clone(&runtime));
-    // The publisher drains the outbox at its own cadence; facts are durable
-    // rows, so a slow or failed pass degrades freshness, never correctness.
-    let publisher = spawn_outbox_publisher(database.clone(), &config.publisher);
+    // The consumer, the outbox relay and the capture resolver run under one supervisor. Facts
+    // are durable rows, so a slow pass degrades freshness, never correctness; a task that ENDS
+    // is a different matter and stops the process (XR-021 CONTRACTS.md S02 rule 5).
+    let (bus_failed, bus_failure) = tokio::sync::watch::channel(false);
+    let bus_supervisor = bus_lane.map(|lane| {
+        lane.spawn(
+            database.clone(),
+            &config,
+            Arc::clone(&runtime),
+            bus_failed.clone(),
+        )
+    });
     let data_export_runtime = config
         .data_export
         .enabled
@@ -214,6 +230,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
             Arc::clone(&runtime),
             move || metrics_handle.render(),
             shutdown_bound,
+            bus_failure.clone(),
         ),
         serve_product(
             api_listener,
@@ -221,10 +238,13 @@ async fn tokio_main() -> Result<(), ExitCode> {
             official_accounts,
             data_export_runtime,
             shutdown_bound,
+            bus_failure,
         ),
     );
     prober.abort();
-    publisher.abort();
+    if let Some(supervisor) = bus_supervisor {
+        supervisor.abort();
+    }
     if let Some((shutdown, mut worker)) = data_export_worker {
         let _ = shutdown.send(true);
         if tokio::time::timeout(shutdown_bound, &mut worker)
@@ -249,9 +269,6 @@ async fn tokio_main() -> Result<(), ExitCode> {
             );
         }
     }
-    if let Some(consumer) = command_consumer {
-        consumer.abort();
-    }
     database.close().await;
 
     match (admin_result, api_result) {
@@ -270,104 +287,40 @@ async fn tokio_main() -> Result<(), ExitCode> {
     }
 }
 
-/// Starts the optional broker lane and turns a configured-bus failure into a
-/// startup failure before readiness can be exposed.
-async fn start_command_consumer(
-    config: &Config,
-    database: Database,
-) -> Result<Option<tokio::task::JoinHandle<()>>, ExitCode> {
-    let Some(bus) = config.bus.as_ref() else {
+/// Prepares the broker lane, or reports why the process must not start.
+///
+/// With a configured bus a failure here is a startup failure before readiness can be exposed;
+/// a configuration failure is `EX_CONFIG`. Without a bus nothing publishes or resolves, which
+/// leaves outbox rows unpublished instead of marking them delivered.
+async fn prepare_bus_lane(config: &Config) -> Result<Option<bus::BusLane>, ExitCode> {
+    let Some(bus_config) = config.bus.as_ref() else {
+        tracing::warn!(
+            "no bus is configured: no publisher or resolver starts and outbox rows stay unpublished"
+        );
         return Ok(None);
     };
-    spawn_browser_capture_consumer(database, bus)
-        .await
-        .map(Some)
-        .map_err(|error| {
-            tracing::error!(%error, "the JetStream command consumer could not start");
-            ExitCode::FAILURE
-        })
-}
-
-/// Connects the provider-specific durable consumer before the service is ready.
-///
-/// A configured broker is mandatory rather than best-effort: accepting a
-/// process as ready while its explicit browser-capture path cannot consume is
-/// an operational lie. The Platform-owned command stream must already exist.
-async fn spawn_browser_capture_consumer(
-    database: Database,
-    bus: &BusConfig,
-) -> Result<tokio::task::JoinHandle<()>, String> {
-    let client = match bus.nkey_seed_path.as_deref() {
-        Some(seed_path) => {
-            let seed = std::fs::read_to_string(seed_path)
-                .map_err(|_| "the NATS nkey seed could not be read".to_owned())?;
-            async_nats::ConnectOptions::with_nkey(seed.trim().to_owned())
-                .connect(&bus.url)
-                .await
-                .map_err(|_| "the NATS broker rejected the configured consumer".to_owned())?
+    match bus::BusLane::connect(config, bus_config).await {
+        Ok(lane) => Ok(Some(lane)),
+        Err(bus::LaneError::Configuration(reason)) => {
+            tracing::error!(%reason, "the broker lane is misconfigured");
+            Err(ExitCode::from(78))
         }
-        None => async_nats::connect(&bus.url)
-            .await
-            .map_err(|_| "the NATS broker could not be reached".to_owned())?,
-    };
-    let context = jetstream::new(client);
-    let consumer: jetstream::consumer::PullConsumer = context
-        .get_consumer_from_stream("ratatoskr_instagram_browser_capture", "ratatoskr_commands")
-        .await
-        .map_err(|_| {
-            "the preprovisioned Instagram durable command consumer is unavailable".to_owned()
-        })?;
-    validate_browser_capture_consumer(&consumer)?;
-    let messages = consumer
-        .messages()
-        .await
-        .map_err(|_| "the Instagram command consumer cannot receive deliveries".to_owned())?;
-    Ok(tokio::spawn(async move {
-        consume_browser_captures(database, messages).await;
-    }))
-}
-
-/// Refuses a broker durable that would broaden delivery or acknowledgement semantics.
-fn validate_browser_capture_consumer(
-    consumer: &jetstream::consumer::PullConsumer,
-) -> Result<(), String> {
-    let info = consumer.cached_info();
-    let config = &info.config;
-    if info.stream_name != "ratatoskr_commands"
-        || info.name != "ratatoskr_instagram_browser_capture"
-        || config.durable_name.as_deref() != Some("ratatoskr_instagram_browser_capture")
-        || config.filter_subject != "cmd.instagram.capture.requested.v1"
-        || config.deliver_subject.is_some()
-        || config.ack_policy != jetstream::consumer::AckPolicy::Explicit
-    {
-        return Err("the preprovisioned Instagram consumer configuration is unsafe".to_owned());
-    }
-    Ok(())
-}
-
-/// Applies one broker delivery only after the archive inbox has recorded it.
-async fn consume_browser_captures(
-    database: Database,
-    mut messages: jetstream::consumer::pull::Stream,
-) {
-    while let Some(delivery) = messages.next().await {
-        let Ok(message) = delivery else {
-            tracing::warn!("the Instagram JetStream delivery could not be read");
-            continue;
-        };
-        ratatoskr_instagram_archive_service::command_consumer::consume_one(&database, &message)
-            .await;
+        Err(bus::LaneError::Runtime(reason)) => {
+            tracing::error!(%reason, "the broker lane could not start");
+            Err(ExitCode::FAILURE)
+        }
     }
 }
 
-/// Serves one plane until its server stops or a signal arrives, draining
-/// within the bound either way. The shared pool is closed by the caller.
+/// Serves one plane until its server stops, a signal arrives, or a bus task ends, draining
+/// within the bound each way. The shared pool is closed by the caller.
 async fn serve_plane(
     plane: &'static str,
     listener: tokio::net::TcpListener,
     router: axum::Router,
     on_signal: impl Fn(),
     shutdown_timeout: Duration,
+    mut bus_failure: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), String> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let server = axum::serve(listener, router)
@@ -379,6 +332,12 @@ async fn serve_plane(
     tokio::select! {
         result = &mut server => {
             result.map_err(|error| error.to_string())
+        }
+        _ = bus_failure.wait_for(|failed| *failed) => {
+            on_signal();
+            let _ignored = shutdown_tx.send(());
+            let _ignored = tokio::time::timeout(shutdown_timeout, &mut server).await;
+            Err(format!("the {plane} server stopped because a bus task ended"))
         }
         result = shutdown_signal() => {
             result.map_err(|error| error.to_string())?;
@@ -398,6 +357,7 @@ async fn serve_admin(
     runtime: Arc<RuntimeState>,
     render_metrics: impl Fn() -> String + Send + Sync + 'static,
     shutdown_timeout: Duration,
+    bus_failure: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), String> {
     let router =
         ratatoskr_instagram_archive_service::admin_router(Arc::clone(&runtime), render_metrics);
@@ -409,6 +369,7 @@ async fn serve_admin(
         // drain window so in-flight requests finish.
         || runtime.begin_draining(),
         shutdown_timeout,
+        bus_failure,
     )
     .await
 }
@@ -420,13 +381,22 @@ async fn serve_product(
     official_accounts: Option<OfficialAccountRuntime>,
     data_export: Option<DataExportRuntime>,
     shutdown_timeout: Duration,
+    bus_failure: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), String> {
     let router = ratatoskr_instagram_archive_service::product::product_router_with_runtimes(
         database,
         official_accounts,
         data_export,
     );
-    serve_plane("product", listener, router, || (), shutdown_timeout).await
+    serve_plane(
+        "product",
+        listener,
+        router,
+        || (),
+        shutdown_timeout,
+        bus_failure,
+    )
+    .await
 }
 
 fn build_official_runtime(config: &Config) -> Result<Option<OfficialAccountRuntime>, String> {
@@ -511,54 +481,6 @@ fn spawn_database_prober(
         loop {
             ticker.tick().await;
             runtime.set_database_reachable(database.ping().await.is_ok());
-        }
-    })
-}
-
-/// The logging carrier behind the transport seam: facts are handed to the
-/// structured log until a broker lane lands. Delivery always succeeds, which
-/// is honest for a log line and keeps at-least-once semantics intact — rows
-/// are marked published only after this returns `Ok`.
-struct LoggingTransport;
-
-impl ratatoskr_instagram_archive::publishing::EventTransport for LoggingTransport {
-    async fn deliver(&self, event_id: Uuid, _envelope_json: &str) -> Result<(), TransportError> {
-        tracing::info!(event = %event_id, "social-source fact delivered to logging transport");
-        Ok(())
-    }
-}
-
-/// Drains the outbox forever, one bounded pass per interval.
-fn spawn_outbox_publisher(
-    database: Database,
-    publisher: &PublisherConfig,
-) -> tokio::task::JoinHandle<()> {
-    let interval = std::time::Duration::from_millis(publisher.poll_interval_ms);
-    let batch_size = publisher.batch_size;
-    tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(interval);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        ticker.tick().await; // consume the immediate tick; publish on cadence
-        let transport = LoggingTransport;
-        loop {
-            match ratatoskr_instagram_archive::publishing::run_once(
-                database.pool(),
-                &transport,
-                batch_size,
-            )
-            .await
-            {
-                Ok(summary) if summary.failed > 0 => {
-                    tracing::warn!(
-                        failed = summary.failed,
-                        remaining = summary.remaining,
-                        "outbox pass completed with failures"
-                    );
-                }
-                Ok(_) => {}
-                Err(error) => tracing::error!(%error, "outbox pass could not run"),
-            }
-            ticker.tick().await;
         }
     })
 }
