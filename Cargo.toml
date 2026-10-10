@@ -80,6 +80,9 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 # ---- property testing for hostile inputs ----
 proptest = "1.11.0"
 
+# ---- HTTP test doubles ----
+wiremock = "0.6.5"
+
 # ---- instants ----
 # RFC 3339 capture timestamps; `serde-well-known` powers the HTTP grammar's
 # `captured_at` parsing at the service boundary.

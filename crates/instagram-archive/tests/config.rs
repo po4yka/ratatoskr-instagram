@@ -4,6 +4,16 @@ use secrecy::ExposeSecret as _;
 
 use ratatoskr_instagram_archive::{Config, StorageConfig};
 
+/// The broker endpoint the minimal valid configuration names.
+const BUS_URL: (&str, &str) = ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222");
+
+/// The resolution token path every valid configuration with a bus must carry; the file itself is
+/// only read at process startup, so it need not exist here.
+const TOKEN_PATH: (&str, &str) = (
+    "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH",
+    "/run/secrets/instagram-oembed-token",
+);
+
 #[test]
 fn missing_bus_configuration_is_refused() {
     let error = Config::from_environment(Vec::<(String, String)>::new())
@@ -16,14 +26,16 @@ fn missing_bus_configuration_is_refused() {
 fn api_listen_address_override_is_honored_and_non_loopback_refused() {
     let config = Config::from_environment([
         ("RATATOSKR__API__LISTEN_ADDRESS", "127.0.0.1:9183"),
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
     ])
     .expect("a loopback override must load");
     assert_eq!(config.api.listen_address.to_string(), "127.0.0.1:9183");
 
     let error = Config::from_environment([
         ("RATATOSKR__API__LISTEN_ADDRESS", "10.0.0.9:9183"),
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
     ])
     .expect_err("the product listener is loopback-only like the operator one");
     let rendered = error.to_string();
@@ -39,7 +51,8 @@ fn api_listen_address_override_is_honored_and_non_loopback_refused() {
 fn unknown_prefixed_key_is_refused_naming_the_key() {
     let error = Config::from_environment([
         ("RATATOSKR__NOT_A_SECTION__VALUE", "1"),
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
     ])
     .expect_err("an unknown key must be refused");
 
@@ -59,7 +72,8 @@ fn multiple_violations_are_reported_together_without_values() {
     let error = Config::from_environment([
         ("RATATOSKR__ADMIN__LISTEN_ADDRESS", "10.0.0.1:9082"),
         ("RATATOSKR__LIMITS__DATABASE_CONNECTIONS", "0"),
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
     ])
     .expect_err("two independent violations must both be refused");
 
@@ -84,7 +98,8 @@ fn multiple_violations_are_reported_together_without_values() {
 fn malformed_database_url_is_refused() {
     let error = Config::from_environment([
         ("RATATOSKR__STORAGE__DATABASE_URL", "not a url at all"),
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
     ])
     .expect_err("a malformed database URL must be refused");
 
@@ -99,7 +114,8 @@ fn recognized_override_changes_exactly_its_own_field() {
             "RATATOSKR__STORAGE__DATABASE_URL",
             "postgres://instagram:instagram@127.0.0.1:5436/instagram",
         ),
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
     ])
     .expect("valid overrides must load");
 
@@ -137,7 +153,8 @@ fn debug_rendering_of_storage_redacts_the_database_url() {
 
 fn complete_oauth_environment() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
         ("RATATOSKR__OAUTH__ENABLED", "true"),
         ("RATATOSKR__OAUTH__CLIENT_ID", "123456789"),
         ("RATATOSKR__OAUTH__CLIENT_SECRET", "synthetic-client-secret"),
@@ -164,11 +181,9 @@ fn complete_oauth_environment() -> Vec<(&'static str, &'static str)> {
 
 #[test]
 fn oauth_disabled_accepts_missing_secrets() {
-    let config = Config::from_environment([
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
-        ("RATATOSKR__OAUTH__ENABLED", "false"),
-    ])
-    .expect("disabled OAuth needs no provider credentials");
+    let config =
+        Config::from_environment([BUS_URL, TOKEN_PATH, ("RATATOSKR__OAUTH__ENABLED", "false")])
+            .expect("disabled OAuth needs no provider credentials");
     assert!(!config.oauth.enabled);
     assert!(config.oauth.client_secret.is_none());
     assert!(config.oauth.keyring.is_none());
@@ -232,7 +247,7 @@ fn production_provider_hosts_cannot_be_overridden() {
 
 #[test]
 fn own_media_scheduler_is_disabled_by_default_and_rejects_unbounded_limits() {
-    let defaults = Config::from_environment([("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222")])
+    let defaults = Config::from_environment([BUS_URL, TOKEN_PATH])
         .expect("configuration with the mandatory bus loads");
     assert!(!defaults.own_media.enabled);
 
@@ -253,7 +268,7 @@ fn own_media_scheduler_is_disabled_by_default_and_rejects_unbounded_limits() {
 fn data_export_configuration_is_disabled_strict_and_secret_free() {
     const OWNER: &str = "018f1a2b-3c4d-7e6f-8a9b-0c1d2e3f4a5b";
     const TOKEN: &str = "synthetic-owner-token-abcdefghijklmnopqrstuvwxyz";
-    let defaults = Config::from_environment([("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222")])
+    let defaults = Config::from_environment([BUS_URL, TOKEN_PATH])
         .expect("the mandatory bus with disabled Data Export loads");
     assert!(!defaults.data_export.enabled);
     assert!(
@@ -264,7 +279,8 @@ fn data_export_configuration_is_disabled_strict_and_secret_free() {
     );
 
     let incomplete = Config::from_environment([
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
         ("RATATOSKR__DATA_EXPORT__ENABLED", "true"),
     ])
     .expect_err("enabled Data Export must require both roots and credentials");
@@ -274,7 +290,8 @@ fn data_export_configuration_is_disabled_strict_and_secret_free() {
     assert!(incomplete_rendered.contains("DATA_EXPORT__BEARER_TOKENS"));
 
     let valid = Config::from_environment([
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
         ("RATATOSKR__DATA_EXPORT__ENABLED", "true"),
         (
             "RATATOSKR__DATA_EXPORT__BLOB_ROOT",
@@ -328,7 +345,8 @@ fn data_export_configuration_is_disabled_strict_and_secret_free() {
     }
 
     let unknown = Config::from_environment([
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
         ("RATATOSKR__DATA_EXPORT__UNBOUNDED", "true"),
     ])
     .expect_err("unknown Data Export keys stay closed");
@@ -337,7 +355,7 @@ fn data_export_configuration_is_disabled_strict_and_secret_free() {
 
 #[test]
 fn item9_workers_require_disabled_or_finite_nonzero_budgets() {
-    let defaults = Config::from_environment([("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222")])
+    let defaults = Config::from_environment([BUS_URL, TOKEN_PATH])
         .expect("item-9 capabilities are safely disabled by default");
     let defaults = serde_json::to_value(defaults).expect("effective config serializes");
     for section in [
@@ -358,11 +376,8 @@ fn item9_workers_require_disabled_or_finite_nonzero_budgets() {
         "RATATOSKR__RE_RESOLUTION__ENABLED",
         "RATATOSKR__REPROCESSING__ENABLED",
     ] {
-        let error = Config::from_environment([
-            ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
-            (enabled_key, "true"),
-        ])
-        .expect_err("an enabled capability requires every reviewed finite guard");
+        let error = Config::from_environment([BUS_URL, TOKEN_PATH, (enabled_key, "true")])
+            .expect_err("an enabled capability requires every reviewed finite guard");
         assert!(
             error.to_string().contains(enabled_key),
             "the enabled section must be identified: {error}"
@@ -370,7 +385,8 @@ fn item9_workers_require_disabled_or_finite_nonzero_budgets() {
     }
 
     let invalid = Config::from_environment([
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
         ("RATATOSKR__MEDIA_RETENTION__ENABLED", "true"),
         ("RATATOSKR__MEDIA_RETENTION__MAX_OBJECT_BYTES", "0"),
         (
@@ -408,7 +424,8 @@ fn item9_workers_require_disabled_or_finite_nonzero_budgets() {
     }
 
     let valid = Config::from_environment([
-        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        BUS_URL,
+        TOKEN_PATH,
         ("RATATOSKR__MEDIA_RETENTION__ENABLED", "true"),
         ("RATATOSKR__MEDIA_RETENTION__MAX_OBJECT_BYTES", "10485760"),
         ("RATATOSKR__MEDIA_RETENTION__MAX_OWNER_BYTES", "104857600"),
@@ -435,4 +452,126 @@ fn item9_workers_require_disabled_or_finite_nonzero_budgets() {
     let valid = serde_json::to_value(valid).expect("effective config serializes");
     assert_eq!(valid["re_resolution"]["request_budget"], 50);
     assert_eq!(valid["reprocessing"]["max_items_per_invocation"], 1_000);
+}
+
+#[test]
+fn public_resolution_requires_a_token_path_when_the_bus_is_configured() {
+    let error = Config::from_environment([BUS_URL])
+        .expect_err("a consumer without a resolution surface can never finish its work");
+    let violation = error
+        .violations
+        .iter()
+        .find(|violation| violation.key == "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH")
+        .expect("the missing key is named");
+    assert!(violation.rule.contains("required"), "{}", violation.rule);
+}
+
+#[test]
+fn public_resolution_defaults_and_overrides_are_bounded() {
+    let defaults = Config::from_environment([BUS_URL, TOKEN_PATH])
+        .expect("the minimal resolution configuration loads");
+    let resolution = &defaults.public_resolution;
+    assert_eq!(
+        resolution.endpoint,
+        "https://graph.facebook.com/v25.0/instagram_oembed"
+    );
+    assert_eq!(resolution.max_attempts, 5);
+    assert_eq!(resolution.batch_size, 8);
+    assert_eq!(resolution.poll_interval_ms, 2_000);
+
+    let tuned = Config::from_environment([
+        BUS_URL,
+        TOKEN_PATH,
+        (
+            "RATATOSKR__PUBLIC_RESOLUTION__ENDPOINT",
+            "https://graph.instagram.com/v25.0/instagram_oembed",
+        ),
+        ("RATATOSKR__PUBLIC_RESOLUTION__MAX_ATTEMPTS", "3"),
+        ("RATATOSKR__PUBLIC_RESOLUTION__BATCH_SIZE", "2"),
+        ("RATATOSKR__PUBLIC_RESOLUTION__POLL_INTERVAL_MS", "500"),
+    ])
+    .expect("every override is within range");
+    assert_eq!(tuned.public_resolution.max_attempts, 3);
+    assert_eq!(tuned.public_resolution.batch_size, 2);
+    assert_eq!(tuned.public_resolution.poll_interval_ms, 500);
+
+    for (key, value) in [
+        ("RATATOSKR__PUBLIC_RESOLUTION__MAX_ATTEMPTS", "0"),
+        ("RATATOSKR__PUBLIC_RESOLUTION__BATCH_SIZE", "0"),
+        ("RATATOSKR__PUBLIC_RESOLUTION__POLL_INTERVAL_MS", "0"),
+        (
+            "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH",
+            "relative/token",
+        ),
+    ] {
+        let error = Config::from_environment([BUS_URL, TOKEN_PATH, (key, value)])
+            .expect_err("an out-of-range value is refused");
+        assert!(error.to_string().contains(key), "{error}");
+    }
+}
+
+#[test]
+fn public_resolution_endpoint_is_https_on_a_meta_graph_host() {
+    for endpoint in [
+        "http://graph.facebook.com/v25.0/instagram_oembed",
+        "https://example.com/v25.0/instagram_oembed",
+        "https://graph.facebook.com.evil.test/v25.0/instagram_oembed",
+        "https://user:secret@graph.facebook.com/v25.0/instagram_oembed",
+        "https://graph.facebook.com/v25.0/instagram_oembed?access_token=x",
+        "not a url",
+    ] {
+        let error = Config::from_environment([
+            BUS_URL,
+            TOKEN_PATH,
+            ("RATATOSKR__PUBLIC_RESOLUTION__ENDPOINT", endpoint),
+        ])
+        .expect_err("a non-Graph endpoint is refused");
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("RATATOSKR__PUBLIC_RESOLUTION__ENDPOINT"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("secret"),
+            "values never render: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn public_resolution_reads_the_token_from_its_file_and_never_renders_it() {
+    let directory = std::env::temp_dir().join(format!("instagram-token-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&directory).expect("a scratch directory");
+    let token_path = directory.join("token");
+    std::fs::write(&token_path, "file-token-value\n").expect("the token file");
+    let config = Config::from_environment([
+        BUS_URL,
+        (
+            "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH",
+            token_path.to_str().expect("a UTF-8 temp path"),
+        ),
+    ])
+    .expect("the configuration loads");
+    let token = config
+        .public_resolution
+        .load_access_token()
+        .expect("the file is read");
+    assert_eq!(
+        token.expose_secret(),
+        "file-token-value",
+        "trailing newline is trimmed"
+    );
+    assert!(!format!("{config:?}").contains("file-token-value"));
+
+    std::fs::write(&token_path, "\n").expect("an empty token file");
+    let error = config
+        .public_resolution
+        .load_access_token()
+        .expect_err("an empty token is refused");
+    assert!(
+        error
+            .to_string()
+            .contains("RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH")
+    );
+    std::fs::remove_dir_all(&directory).expect("the scratch directory is removed");
 }

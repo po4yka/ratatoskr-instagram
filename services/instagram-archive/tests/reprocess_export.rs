@@ -34,6 +34,10 @@ fn run(arguments: &[String], database_url: Option<&str>) -> Output {
         command
             .env("RATATOSKR__STORAGE__DATABASE_URL", database_url)
             .env("RATATOSKR__BUS__URL", NATS_URL)
+            .env(
+                "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH",
+                "/run/secrets/instagram-oembed-token",
+            )
             .env("RATATOSKR__REPROCESSING__ENABLED", "true")
             .env("RATATOSKR__REPROCESSING__MAX_ITEMS_PER_INVOCATION", "1000");
     }
@@ -159,6 +163,10 @@ async fn process_contract_separates_json_stdout_diagnostics_and_exit_codes() {
         .env_clear()
         .env("RATATOSKR__STORAGE__DATABASE_URL", &database_url)
         .env("RATATOSKR__BUS__URL", NATS_URL)
+        .env(
+            "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH",
+            "/run/secrets/instagram-oembed-token",
+        )
         .env("RATATOSKR__REPROCESSING__ENABLED", "true")
         .env("RATATOSKR__REPROCESSING__MAX_ITEMS_PER_INVOCATION", "1000")
         .stdout(Stdio::piped())

@@ -38,6 +38,7 @@ test-support = []
 
 [dev-dependencies]
 ratatoskr-instagram-archive = { path = ".", features = ["test-support"] }
+wiremock.workspace = true
 serde_json.workspace = true
 proptest.workspace = true
 

@@ -1,3 +1,13 @@
+# Test fixtures for the gate: PostgreSQL and a JetStream-enabled NATS. The service itself is not
+# part of this file. To run it against these fixtures, set at least:
+#
+#   RATATOSKR__STORAGE__DATABASE_URL=postgres://instagram:instagram@127.0.0.1:5436/instagram
+#   RATATOSKR__BUS__URL=nats://127.0.0.1:14225
+#   RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH=/absolute/path/to/a/file/with/the/meta/app/token
+#
+# The access-token path is required whenever the bus is set (the process exits 78 without it).
+# Optional: RATATOSKR__PUBLIC_RESOLUTION__{ENDPOINT,MAX_ATTEMPTS,BATCH_SIZE,POLL_INTERVAL_MS}.
+# A bare `nats -js` accepts any publish; the deployed ACL is platform/deploy/nats/ratatoskr.conf.
 services:
   nats:
     image: nats:2-alpine@sha256:d4ac35882ac65aff236cd65b9d3fa4d24332c681e1a85f94eedccd3cdd65b1da

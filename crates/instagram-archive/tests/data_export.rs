@@ -127,6 +127,10 @@ fn data_export_config(root: &Path) -> ratatoskr_instagram_archive::DataExportCon
             "nats://127.0.0.1:4222".to_owned(),
         ),
         (
+            "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH".to_owned(),
+            "/run/secrets/instagram-oembed-token".to_owned(),
+        ),
+        (
             "RATATOSKR__DATA_EXPORT__ENABLED".to_owned(),
             "true".to_owned(),
         ),

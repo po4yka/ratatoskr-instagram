@@ -49,6 +49,8 @@ pub mod provider_budget;
 /// Social-source publishing: snapshot construction, transactional outbox
 /// appends, and the at-least-once publisher loop over a transport seam.
 pub mod publishing;
+/// The production public-resolution surface over Meta's `instagram_oembed`.
+pub mod public_surface;
 /// Finite recent-capture public re-resolution jobs and budget admission.
 pub mod re_resolution;
 /// Public resolution: the approved surface seam, immutable parser-versioned
@@ -71,7 +73,7 @@ pub use command_capture::{
 };
 pub use config::{
     AdminConfig, BusConfig, Config, ConfigError, DataExportConfig, Limits, OAuthConfig,
-    PublisherConfig, StorageConfig, TelemetryConfig,
+    PublicResolutionConfig, PublisherConfig, StorageConfig, TelemetryConfig,
 };
 pub use database::{Database, PersistenceError};
 pub use permalink::{CanonicalPermalink, PermalinkError, PermalinkKind};

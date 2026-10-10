@@ -48,6 +48,10 @@ fn export_config(root: &Path, tokens: &str, max_body_bytes: u64) -> Config {
             "nats://127.0.0.1:4222".to_owned(),
         ),
         (
+            "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH".to_owned(),
+            "/run/secrets/instagram-oembed-token".to_owned(),
+        ),
+        (
             "RATATOSKR__DATA_EXPORT__ENABLED".to_owned(),
             "true".to_owned(),
         ),

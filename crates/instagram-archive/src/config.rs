@@ -14,9 +14,11 @@ use serde::Serialize;
 
 mod data_export;
 mod item9;
+mod public_resolution;
 
 pub use data_export::DataExportConfig;
 pub use item9::{BlobDeletionConfig, MediaRetentionConfig, ReResolutionConfig, ReprocessingConfig};
+pub use public_resolution::PublicResolutionConfig;
 
 const ENV_PREFIX: &str = "RATATOSKR__";
 
@@ -51,6 +53,8 @@ pub struct Config {
     pub reprocessing: ReprocessingConfig,
     /// `JetStream` command-consumer configuration.
     pub bus: Option<BusConfig>,
+    /// The public-resolution surface and worker; required with the bus.
+    pub public_resolution: PublicResolutionConfig,
 }
 
 /// The broker identity used only by the command consumer.
@@ -283,6 +287,11 @@ impl Config {
         validate_own_media(&config, &mut violations);
         config.data_export.validate(&mut violations);
         item9::validate(&config, &mut violations);
+        public_resolution::validate(
+            &config.public_resolution,
+            config.bus.is_some(),
+            &mut violations,
+        );
 
         if config.bus.as_ref().is_none_or(|bus| bus.url.is_empty()) {
             violations.push(Violation {
@@ -706,6 +715,16 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
                 violations.push(refused("is not recognized"));
             }
         }
+        key if key.starts_with("RATATOSKR__PUBLIC_RESOLUTION__") => {
+            if !public_resolution::apply_environment(
+                &mut config.public_resolution,
+                key,
+                value,
+                violations,
+            ) {
+                violations.push(refused("is not recognized"));
+            }
+        }
         "RATATOSKR__BUS__URL" => {
             if matches!(value.split("://").next(), Some("nats" | "tls")) && !value.contains('@') {
                 let bus = config.bus.get_or_insert_with(default_bus);
@@ -815,6 +834,7 @@ impl Default for Config {
                 max_items_per_invocation: None,
             },
             bus: None,
+            public_resolution: PublicResolutionConfig::default(),
         }
     }
 }

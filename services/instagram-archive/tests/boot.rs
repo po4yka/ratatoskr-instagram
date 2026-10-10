@@ -45,6 +45,10 @@ fn spawn_service(database_url: &str, admin_port: u16) -> Child {
         .env("RATATOSKR__STORAGE__DATABASE_URL", database_url)
         .env("RATATOSKR__BUS__URL", test_nats_url())
         .env(
+            "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH",
+            token_file(),
+        )
+        .env(
             "RATATOSKR__ADMIN__LISTEN_ADDRESS",
             format!("127.0.0.1:{admin_port}"),
         )
@@ -123,6 +127,10 @@ async fn check_config_accepts_valid_configuration_without_binding() {
         .arg("check-config")
         .env("RATATOSKR__STORAGE__DATABASE_URL", test_url(test.name()))
         .env("RATATOSKR__BUS__URL", test_nats_url())
+        .env(
+            "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH",
+            token_file(),
+        )
         .output()
         .expect("check-config runs");
 
@@ -140,6 +148,10 @@ async fn check_config_refuses_invalid_configuration_without_echoing_values() {
         .env("RATATOSKR__ADMIN__LISTEN_ADDRESS", "10.9.8.7:9082")
         .env("RATATOSKR__LIMITS__SHUTDOWN_TIMEOUT_MS", "0")
         .env("RATATOSKR__BUS__URL", test_nats_url())
+        .env(
+            "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH",
+            token_file(),
+        )
         .output()
         .expect("check-config runs");
 
@@ -159,6 +171,10 @@ async fn missing_database_url_refuses_startup() {
     let port = free_port();
     let mut child = Command::new(BIN)
         .env("RATATOSKR__BUS__URL", test_nats_url())
+        .env(
+            "RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH",
+            token_file(),
+        )
         .env(
             "RATATOSKR__ADMIN__LISTEN_ADDRESS",
             format!("127.0.0.1:{port}"),
@@ -204,6 +220,14 @@ fn test_url(name: &str) -> String {
     let base = ratatoskr_instagram_archive::test_support::admin_url();
     let (prefix, _) = base.rsplit_once('/').unwrap_or((base.as_str(), ""));
     format!("{prefix}/{name}")
+}
+
+/// An access-token file the booting service can read; its content is a synthetic placeholder.
+#[expect(clippy::expect_used, reason = "boot-test helper; see free_port")]
+fn token_file() -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("instagram-boot-token-{}", std::process::id()));
+    std::fs::write(&path, "boot-test-token\n").expect("the token file is written");
+    path
 }
 
 #[expect(
