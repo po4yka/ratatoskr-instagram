@@ -212,7 +212,30 @@ impl Database {
         resolved_at: OffsetDateTime,
     ) -> Result<ResolutionOutcome, ResolutionError> {
         let permalink = self.stored_capture_permalink(capture_id).await?;
-        match surface.fetch(&permalink).await {
+        let outcome = surface.fetch(&permalink).await;
+        self.apply_surface_outcome(capture_id, &permalink, outcome, resolved_at)
+            .await
+    }
+
+    /// Applies what the approved surface answered for one capture's permalink.
+    ///
+    /// This is the half of [`Self::resolve_capture_permalink`] that follows the fetch, split out
+    /// so a caller that owns the fetch (the capture resolution worker, which retries transient
+    /// outcomes before concluding) can conclude a capture without a second request. A payload is
+    /// preserved as evidence, a revision and a normalized source; any other outcome records its
+    /// availability kind verbatim and fabricates nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResolutionError`] when a query fails or the payload exceeds storable size.
+    pub async fn apply_surface_outcome(
+        &self,
+        capture_id: Uuid,
+        permalink: &CanonicalPermalink,
+        outcome: SurfaceOutcome,
+        resolved_at: OffsetDateTime,
+    ) -> Result<ResolutionOutcome, ResolutionError> {
+        match outcome {
             SurfaceOutcome::Payload { body } => {
                 // An unreadable payload is this service's failed attempt,
                 // never a statement about the source.
@@ -230,7 +253,7 @@ impl Database {
                 Ok(ResolutionOutcome::Resolved(
                     self.store_resolution(
                         capture_id,
-                        &permalink,
+                        permalink,
                         &normalized,
                         body.as_bytes(),
                         byte_size,
@@ -465,7 +488,7 @@ impl Database {
     /// attempt that failed before classification stays `resolution_failed` —
     /// and concludes the intake as `unavailable`. No media row and no revision
     /// exist afterwards, and nothing is ever rewritten to another kind.
-    async fn record_failed_resolution(
+    pub(crate) async fn record_failed_resolution(
         &self,
         capture_id: Uuid,
         observed: AvailabilityObservationKind,

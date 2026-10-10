@@ -21,6 +21,9 @@ pub mod capability_reconciliation;
 /// Explicit capture intake: submission identity, provenance, and the
 /// unavailable fallback.
 pub mod capture;
+/// The capture resolution worker: bounded retry and exactly-once terminal
+/// operation reports.
+pub mod capture_resolution;
 /// Provider-specific browser-command validation and capture handoff.
 pub mod command_capture;
 pub mod config;
@@ -46,11 +49,11 @@ pub mod privacy_deletion;
 pub mod provider;
 /// Durable pre-I/O accounting for official provider calls.
 pub mod provider_budget;
+/// The production public-resolution surface over Meta's `instagram_oembed`.
+pub mod public_surface;
 /// Social-source publishing: snapshot construction, transactional outbox
 /// appends, and the at-least-once publisher loop over a transport seam.
 pub mod publishing;
-/// The production public-resolution surface over Meta's `instagram_oembed`.
-pub mod public_surface;
 /// Finite recent-capture public re-resolution jobs and budget admission.
 pub mod re_resolution;
 /// Public resolution: the approved surface seam, immutable parser-versioned
