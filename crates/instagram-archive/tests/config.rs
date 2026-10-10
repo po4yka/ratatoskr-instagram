@@ -516,7 +516,7 @@ fn public_resolution_endpoint_is_https_on_a_meta_graph_host() {
         "http://graph.facebook.com/v25.0/instagram_oembed",
         "https://example.com/v25.0/instagram_oembed",
         "https://graph.facebook.com.evil.test/v25.0/instagram_oembed",
-        "https://user:secret@graph.facebook.com/v25.0/instagram_oembed",
+        "https://user:REDACTED@graph.facebook.com/v25.0/instagram_oembed",
         "https://graph.facebook.com/v25.0/instagram_oembed?access_token=x",
         "not a url",
     ] {
@@ -532,7 +532,7 @@ fn public_resolution_endpoint_is_https_on_a_meta_graph_host() {
             "{rendered}"
         );
         assert!(
-            !rendered.contains("secret"),
+            !rendered.contains("REDACTED"),
             "values never render: {rendered}"
         );
     }
