@@ -50,6 +50,8 @@ pub enum OwnedDataClass {
     OwnMediaAuthority,
     /// `instagram_archive.captures`.
     Captures,
+    /// `instagram_archive.capture_operations`.
+    CaptureOperations,
     /// `instagram_archive.capture_analysis_links`.
     CaptureAnalysisLinks,
     /// `instagram_archive.capture_notes`.
@@ -119,6 +121,7 @@ impl OwnedDataClass {
             Self::OwnMediaSyncItems => "table:own_media_sync_items",
             Self::OwnMediaAuthority => "table:own_media_authority",
             Self::Captures => "table:captures",
+            Self::CaptureOperations => "table:capture_operations",
             Self::CaptureAnalysisLinks => "table:capture_analysis_links",
             Self::CaptureNotes => "table:capture_notes",
             Self::ExportSnapshots => "table:export_snapshots",

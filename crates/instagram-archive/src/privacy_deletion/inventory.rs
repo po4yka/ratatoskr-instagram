@@ -22,6 +22,7 @@ pub const OWNED_DATA_CLASSES: &[OwnedDataClass] = &[
     OwnedDataClass::OwnMediaSyncItems,
     OwnedDataClass::OwnMediaAuthority,
     OwnedDataClass::Captures,
+    OwnedDataClass::CaptureOperations,
     OwnedDataClass::CaptureAnalysisLinks,
     OwnedDataClass::CaptureNotes,
     OwnedDataClass::ExportSnapshots,
@@ -89,6 +90,7 @@ pub const CAPTURE_DELETION_CLASSIFICATIONS: &[DataClassDisposition] = &[
         DeletionAction::NotApplicable,
     ),
     disposition(OwnedDataClass::Captures, DeletionAction::Delete),
+    disposition(OwnedDataClass::CaptureOperations, DeletionAction::Delete),
     disposition(OwnedDataClass::CaptureAnalysisLinks, DeletionAction::Delete),
     disposition(OwnedDataClass::CaptureNotes, DeletionAction::Delete),
     disposition(
@@ -171,6 +173,10 @@ pub const CONNECTION_DELETION_CLASSIFICATIONS: &[DataClassDisposition] = &[
     disposition(OwnedDataClass::OwnMediaSyncItems, DeletionAction::Delete),
     disposition(OwnedDataClass::OwnMediaAuthority, DeletionAction::Delete),
     disposition(OwnedDataClass::Captures, DeletionAction::NotApplicable),
+    disposition(
+        OwnedDataClass::CaptureOperations,
+        DeletionAction::NotApplicable,
+    ),
     disposition(
         OwnedDataClass::CaptureAnalysisLinks,
         DeletionAction::NotApplicable,

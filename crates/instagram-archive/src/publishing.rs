@@ -21,8 +21,10 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 mod data_export;
+mod operation_report;
 
 pub(crate) use data_export::append_fact as append_data_export_fact;
+pub(crate) use operation_report::append_operation_report;
 
 /// The platform token every published snapshot carries.
 pub const SOCIAL_PLATFORM: &str = "instagram";

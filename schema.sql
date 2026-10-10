@@ -486,6 +486,7 @@ create table instagram_archive.captures (
     client_idempotency_key text,
     captured_at        timestamptz not null,
     next_resolution_at timestamptz,
+    resolution_attempts integer    not null default 0,
     created_at         timestamptz not null default now(),
     constraint captures_media_id_fkey foreign key (media_id)
         references instagram_archive.media (media_id),
@@ -502,13 +503,43 @@ create table instagram_archive.captures (
             ('ios_share_extension', 'android_share_target', 'browser_extension', 'telegram')),
     constraint captures_status_check
         check (status in ('accepted', 'resolved', 'unavailable', 'failed', 'tombstoned')),
+    constraint captures_resolution_attempts_check check (resolution_attempts >= 0),
     constraint captures_user_canonical_key unique (user_ref, canonical_url)
 );
 
 comment on table instagram_archive.captures is
     'Explicit user captures. media_id stays open while the item is unresolved or unavailable. '
     '(user_ref, canonical_url) is the deduplicating identity; client_idempotency_key records the '
-    'platform operation key for correlation and never participates in identity.';
+    'platform operation key for correlation and never participates in identity. '
+    'next_resolution_at and resolution_attempts drive the public-resolution worker.';
+
+-- ---------------------------------------------------------------------------------------------
+-- capture_operations
+-- ---------------------------------------------------------------------------------------------
+--
+-- Captures dedupe on (user_ref, canonical_url), so one capture can carry several Platform
+-- operations. One row per operation; reported_at is set in the same statement that inserts the
+-- terminal report, so a redelivery or a crash between resolution and reporting only reports.
+
+create table instagram_archive.capture_operations (
+    operation_id uuid        primary key,
+    command_id   uuid        not null,
+    capture_id   uuid        not null,
+    user_ref     uuid        not null,
+    reported_at  timestamptz,
+    created_at   timestamptz not null default now(),
+    constraint capture_operations_command_id_key unique (command_id),
+    constraint capture_operations_capture_id_fkey foreign key (capture_id)
+        references instagram_archive.captures (capture_id)
+);
+
+create index capture_operations_unreported_idx
+    on instagram_archive.capture_operations (capture_id)
+    where reported_at is null;
+
+comment on table instagram_archive.capture_operations is
+    'One Platform operation per explicit capture command. reported_at marks the terminal '
+    'platform.operation.reported.v1 and is written together with that outbox row.';
 
 -- ---------------------------------------------------------------------------------------------
 -- capture_analysis_links
@@ -747,8 +778,13 @@ create table instagram_archive.outbox_events (
     published_at    timestamptz,
     attempt_count   integer     not null default 0,
     next_attempt_at timestamptz,
+    last_error      text,
     constraint outbox_events_aggregate_type_check
-        check (aggregate_type in ('capture', 'media', 'account', 'import'))
+        check (aggregate_type in ('capture', 'media', 'account', 'import', 'operation')),
+    constraint outbox_events_event_type_check
+        check (event_type in
+            ('platform.operation.reported.v1', 'social.source.captured.v1',
+             'social.source.updated.v1', 'social.source.removed.v1'))
 );
 
 comment on table instagram_archive.outbox_events is

@@ -83,6 +83,7 @@ pub(super) async fn apply_target_rows(
     for statement in [
         "delete from instagram_archive.capture_analysis_links where capture_id = $1",
         "delete from instagram_archive.capture_notes where capture_id = $1",
+        "delete from instagram_archive.capture_operations where capture_id = $1",
         "delete from instagram_archive.reresolution_items where capture_id = $1",
         "delete from instagram_archive.availability_observations where capture_id = $1",
     ] {

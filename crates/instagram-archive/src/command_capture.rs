@@ -1,9 +1,10 @@
 //! Provider-specific validation for explicit browser capture commands.
 
 use ratatoskr_event_envelope::CommandEnvelope;
-use ratatoskr_identifiers::ContentDigest;
+use ratatoskr_identifiers::{ContentDigest, OperationId};
 use ratatoskr_social_contracts::{
     AcquisitionMethod, SavedAuthority, SocialCaptureProvider, SocialCaptureRequested,
+    SourceUnavailability, queued_report, unavailable_report,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -12,6 +13,7 @@ use crate::Database;
 use crate::capture::{
     CaptureError, CaptureRequest, CaptureSubmission, ClientSource, submit_capture_in_transaction,
 };
+use crate::publishing::{PublishError, append_operation_report};
 
 /// Stable inbox identity for Platform's Instagram browser-capture command.
 const BROWSER_CAPTURE_CONSUMER: &str = "ratatoskr-instagram-browser-capture";
@@ -66,6 +68,18 @@ pub enum CommandCaptureError {
     /// The service could not record the durable inbox claim.
     #[error("the browser capture inbox could not be persisted")]
     Persistence(#[from] sqlx::Error),
+    /// The operation report could not be built or stored; the delivery is retried.
+    #[error("the operation report could not be recorded")]
+    Report(#[source] PublishError),
+}
+
+impl From<PublishError> for CommandCaptureError {
+    fn from(error: PublishError) -> Self {
+        match error {
+            PublishError::Persistence(error) => Self::Persistence(error),
+            other => Self::Report(other),
+        }
+    }
 }
 
 /// The durable result of accepting one at-least-once command delivery.
@@ -75,6 +89,9 @@ pub enum BrowserCaptureIngested {
     Preserved(CaptureSubmission),
     /// The command delivery had already completed in this consumer's inbox.
     Duplicate,
+    /// The command named an operation and an owner but a permalink this
+    /// service cannot map; the operation received a terminal failure report.
+    Rejected,
 }
 
 /// Validates one Platform command delivered to the Instagram subject.
@@ -157,27 +174,125 @@ impl Database {
             return Ok(BrowserCaptureIngested::Duplicate);
         }
 
-        let submission = submit_capture_in_transaction(
+        let submission = match submit_capture_in_transaction(
             &mut transaction,
             &CaptureRequest {
                 user_ref: command.user_ref,
-                url: command.original_permalink,
+                url: command.original_permalink.clone(),
                 captured_at: command.captured_at,
                 client_source: command.client_source,
                 note: None,
                 client_idempotency_key: Some(command.idempotency_key.hex.to_string()),
             },
         )
-        .await?;
-        sqlx::query(
-            "update instagram_archive.inbox_events set handler_outcome = 'processed' \
-             where consumer_name = $1 and event_id = $2",
-        )
-        .bind(BROWSER_CAPTURE_CONSUMER)
-        .bind(command.command_id)
-        .execute(&mut *transaction)
-        .await?;
+        .await
+        {
+            Ok(submission) => submission,
+            // The command names an operation and an owner but a permalink this service cannot
+            // map. Dropping it silently would leave the operation open until Platform's stale
+            // reaper, so it is answered with a terminal report (S10 CD2).
+            Err(CaptureError::InvalidUrl(_)) => {
+                let report = unavailable_report(
+                    OperationId(command.operation_id),
+                    SourceUnavailability::Inaccessible,
+                )
+                .map_err(|error| rejected_report_error(command.operation_id, &error))?;
+                append_operation_report(
+                    &mut transaction,
+                    None,
+                    command.user_ref,
+                    command.command_id,
+                    &report,
+                )
+                .await?;
+                mark_inbox_outcome(&mut transaction, command.command_id, "rejected").await?;
+                transaction.commit().await?;
+                return Ok(BrowserCaptureIngested::Rejected);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let capture_id = submission.record().capture_id;
+        record_operation(&mut transaction, &command, capture_id).await?;
+        mark_inbox_outcome(&mut transaction, command.command_id, "processed").await?;
         transaction.commit().await?;
         Ok(BrowserCaptureIngested::Preserved(submission))
     }
+}
+
+/// Stores the operation the command carries, makes its capture due, and queues the report.
+///
+/// One capture can carry several operations because captures dedupe on
+/// `(user_ref, canonical_url)`. A capture that concluded as `unavailable` is reopened, since a
+/// deleted or private post needs a new explicit acquisition (S10 CD7); an `accepted` capture
+/// keeps its retry schedule unless it has none; a `resolved` capture is left alone and its new
+/// operation is reported without a refetch.
+async fn record_operation(
+    transaction: &mut sqlx::PgConnection,
+    command: &BrowserCaptureCommand,
+    capture_id: Uuid,
+) -> Result<(), CommandCaptureError> {
+    let inserted = sqlx::query(
+        "insert into instagram_archive.capture_operations \
+         (operation_id, command_id, capture_id, user_ref) values ($1, $2, $3, $4) \
+         on conflict do nothing",
+    )
+    .bind(command.operation_id)
+    .bind(command.command_id)
+    .bind(capture_id)
+    .bind(command.user_ref)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        "update instagram_archive.captures set \
+             status = 'accepted', \
+             resolution_attempts = case when status = 'unavailable' then 0 \
+                                        else resolution_attempts end, \
+             next_resolution_at = case when status = 'unavailable' then now() \
+                                       else coalesce(next_resolution_at, now()) end \
+         where capture_id = $1 and status in ('accepted', 'unavailable')",
+    )
+    .bind(capture_id)
+    .execute(&mut *transaction)
+    .await?;
+    // A known operation id (a re-issued command) already has its queued report.
+    if inserted.rows_affected() == 1 {
+        let report = queued_report(OperationId(command.operation_id))
+            .map_err(|error| rejected_report_error(command.operation_id, &error))?;
+        append_operation_report(
+            transaction,
+            Some(capture_id),
+            command.user_ref,
+            command.command_id,
+            &report,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn mark_inbox_outcome(
+    transaction: &mut sqlx::PgConnection,
+    command_id: Uuid,
+    outcome: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "update instagram_archive.inbox_events set handler_outcome = $3 \
+         where consumer_name = $1 and event_id = $2",
+    )
+    .bind(BROWSER_CAPTURE_CONSUMER)
+    .bind(command_id)
+    .bind(outcome)
+    .execute(&mut *transaction)
+    .await?;
+    Ok(())
+}
+
+fn rejected_report_error(
+    operation_id: Uuid,
+    error: &ratatoskr_social_contracts::SocialContractError,
+) -> CommandCaptureError {
+    CommandCaptureError::Report(PublishError::ContractViolation(
+        operation_id,
+        error.to_string(),
+    ))
 }
