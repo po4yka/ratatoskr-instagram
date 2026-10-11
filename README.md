@@ -443,7 +443,7 @@ not a database migration or legacy import.
 
 ## Workspace integration
 
-Planned: `ratatoskr-workspace` will pin Instagram with compatible social contracts, Platform, Mobile, Browser Extension, Extractor, Knowledge, and client commits. No workspace pin or integration profile exists for this service today. The connector will remain independently testable with recorded public-resolution fixtures, synthetic exports, and mock OAuth/API servers.
+`ratatoskr-workspace` pins this service (`workspace.toml` entry `instagram` in the `social` profile, with the commit in `workspace.lock`) and its harness checks it against the rest of the fleet: the operator listener `9082` and the product API `9083` in the port allocation table of `docs/DEPLOYMENT_TARGET.md`, the Instagram stanza and the Edge-provisioned durable `ratatoskr_instagram_browser_capture` in the bus ACL and durable checks. No composed Compose profile starts this service, and the cross-service evidence, the native smoke of changeset XR-021, has not run the social-capture flow for Instagram, so no end-to-end claim is made. The success path of public resolution against Meta needs a Meta app access token with `instagram_oembed` access, which this repository cannot provision. The connector stays independently testable with recorded public-resolution fixtures, synthetic exports, and mock OAuth/API servers.
 
 ### Deployment
 
