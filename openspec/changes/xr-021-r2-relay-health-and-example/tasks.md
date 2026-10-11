@@ -1,0 +1,10 @@
+## Tasks
+
+Behaviour tasks run against the disposable-database harness (`test_support::TestDatabase`), the isolated JetStream fixture (`INSTAGRAM_ARCHIVE_TEST_NATS_URL`) and, for the refused-publish test, a `nats-server` process the test spawns itself. Cross-repository behaviour is defined in XR-021 CONTRACTS.md R2-03, R2-04 and R2-10.
+
+- [ ] 1.0 Refactor (no failing test possible: behaviour is unchanged and the existing suite is the evidence): move the publisher pass out of `publishing.rs`, which sits at 840 of 850 lines, into `publishing/pump.rs`, and extract `relay_outbox` from the binary's `bus.rs` into the service library.
+- [ ] 1.1 RED: Add `crates/instagram-archive/tests/outbox_backoff.rs::an_oversize_envelope_is_undeliverable_and_later_rows_publish`, `services/instagram-archive/tests/nats_transport.rs::a_refused_publish_flips_readiness_until_a_clean_pass` and `deliver_marks_a_body_over_the_server_limit_undeliverable`. Expected failure: signature-only stubs exist, so the assertions fail (`undeliverable_at` stays null and the counter is absent; `/health/ready` stays 200 with no `bus_publish` check; the oversize body is published or refused as a transient error).
+- [ ] 1.2 GREEN: `NatsEventTransport::deliver` compares the body with `max_payload`; the pass records `undeliverable_at` (`schema.sql` edited in place), counts `instagram_outbox_undeliverable_total{class}` and returns a verdict; `PublisherHealth` feeds the `bus_publish` check of `RuntimeState`; CI makes `nats-server` available.
+- [ ] 2.1 RED: Add `services/instagram-archive/tests/boot.rs::the_shipped_example_loads`. Expected failure: `deploy/systemd/instagram.conf.example` does not exist.
+- [ ] 2.2 GREEN (configuration and documentation): ship the example and a `DEVELOPMENT.md` pointer stating that a Meta app token with oEmbed access is an external prerequisite.
+- [ ] 3.1 Gate: run the full command list from `DEVELOPMENT.md`, `cargo deny --locked check`, the 850-line check, `git diff --check` and `openspec validate --all --strict`; tick tasks only with evidence.
