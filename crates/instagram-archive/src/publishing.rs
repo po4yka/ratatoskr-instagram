@@ -21,14 +21,17 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 mod data_export;
+mod health;
 mod operation_report;
 mod pump;
 
 pub(crate) use data_export::append_fact as append_data_export_fact;
+pub use health::PublisherHealth;
 pub(crate) use operation_report::append_operation_report;
 pub use pump::{
-    EventTransport, OUTBOX_DELIVERED_TOTAL, OUTBOX_FAILED_TOTAL, OUTBOX_REDELIVERED_TOTAL,
-    OUTBOX_UNPUBLISHED_DEPTH, PassSummary, TransportError, run_once,
+    EventTransport, OUTBOX_DELIVERED_TOTAL, OUTBOX_FAILED_TOTAL, OUTBOX_PUBLISHER_FAILING_TOTAL,
+    OUTBOX_REDELIVERED_TOTAL, OUTBOX_UNDELIVERABLE_TOTAL, OUTBOX_UNPUBLISHED_DEPTH, PassSummary,
+    PassVerdict, TransportError, UndeliverableClass, run_once,
 };
 
 /// The platform token every published snapshot carries.

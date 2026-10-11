@@ -50,6 +50,7 @@ fixture. `compose.yaml` exposes PostgreSQL on `127.0.0.1:5436` (user/password/da
 and NATS on `127.0.0.1:14225`. Set `INSTAGRAM_ARCHIVE_TEST_DATABASE_URL` to the PostgreSQL URL and
 `INSTAGRAM_ARCHIVE_TEST_NATS_URL=nats://127.0.0.1:14225` before the gate. The suite creates
 disposable databases and its own JetStream stream/consumer; missing fixtures fail rather than skip.
+`services/instagram-archive/tests/nats_transport.rs` also starts a private authorization-enabled `nats-server` (the binary must be on `PATH`; CI extracts it from the pinned `nats:2-alpine` image) to prove that a refused publish fails readiness; set `INSTAGRAM_ARCHIVE_TEST_PORT_BASE` to confine its listener to 20 ports from that number upward instead of an ephemeral port.
 CI additionally runs the 850-line file ratchet and a guard asserting this command list is
 byte-identical to `.github/workflows/ci.yml`.
 
@@ -139,7 +140,7 @@ A configured bus also requires the public-resolution surface: set
 app access token (exit 78 otherwise; `check-config` reads the file too). The same identity must be
 allowed to publish `evt.platform.operation.reported.v1` and
 `evt.social.source.{captured,updated,removed}.v1`; a denied publish is silent for the client, so a
-stuck outbox means: check the NATS server log for a `Publish Violation`. Without a bus nothing
+stuck outbox means: check the NATS server log for a `Publish Violation`, and `/health/ready` says so with a failing `bus_publish` check once the oldest unpublished row has failed three times or is older than 300 seconds (the relay keeps retrying and the process does not exit; the check passes again after the row is delivered). An envelope larger than the broker's `max_payload` minus 1 KiB can never be delivered: its row gets `undeliverable_at` and the error class `payload_too_large`, `instagram_outbox_undeliverable_total{class}` counts it, and it never affects readiness. Without a bus nothing
 publishes and outbox rows stay unpublished (they are never marked delivered). If the command
 consumer, the outbox relay or the capture resolver stops, readiness fails and the process exits
 non-zero. `tests/browser_capture_e2e.rs` runs one permalink through the real consumer, the

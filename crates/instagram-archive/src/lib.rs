@@ -81,8 +81,8 @@ pub use config::{
 pub use database::{Database, PersistenceError};
 pub use permalink::{CanonicalPermalink, PermalinkError, PermalinkKind};
 pub use publishing::{
-    EventTransport, FactKind, PRODUCER_NAME, PublishError, SOCIAL_PLATFORM, TransportError,
-    source_identity,
+    EventTransport, FactKind, PRODUCER_NAME, PublishError, PublisherHealth, SOCIAL_PLATFORM,
+    TransportError, UndeliverableClass, source_identity,
 };
 pub use resolution::{
     NormalizeError, NormalizedMedia, OEMBED_PARSER_VERSION, PublicSurface, ResolutionError,

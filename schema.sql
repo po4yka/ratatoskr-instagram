@@ -779,6 +779,7 @@ create table instagram_archive.outbox_events (
     attempt_count   integer     not null default 0,
     next_attempt_at timestamptz,
     last_error      text,
+    undeliverable_at timestamptz,
     constraint outbox_events_aggregate_type_check
         check (aggregate_type in ('capture', 'media', 'account', 'import', 'operation')),
     constraint outbox_events_event_type_check
@@ -790,9 +791,12 @@ create table instagram_archive.outbox_events (
 comment on table instagram_archive.outbox_events is
     'Transactional outbox. Rows become at-least-once publications; replay converges.';
 
+comment on column instagram_archive.outbox_events.undeliverable_at is
+    'Set when no retry can deliver the row (last_error holds the closed class, for example payload_too_large). The relay never selects such a row again and it does not count as unpublished work.';
+
 create index outbox_events_unpublished_idx
     on instagram_archive.outbox_events (next_attempt_at)
-    where published_at is null;
+    where published_at is null and undeliverable_at is null;
 
 create unique index outbox_events_own_media_content_key
     on instagram_archive.outbox_events

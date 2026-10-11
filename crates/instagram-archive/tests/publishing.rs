@@ -734,7 +734,7 @@ impl EventTransport for FlakyTransport {
         };
         attempts.push((event_id, envelope_json.to_owned()));
         if self.failures_first.fetch_sub(1, Ordering::SeqCst) > 1 {
-            return Err(TransportError("carrier down".to_owned()));
+            return Err(TransportError::Transient("carrier down".to_owned()));
         }
         Ok(())
     }

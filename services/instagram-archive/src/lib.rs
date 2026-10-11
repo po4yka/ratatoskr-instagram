@@ -22,6 +22,7 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use ratatoskr_instagram_archive::PublisherHealth;
 use serde::Serialize;
 
 /// The provider-specific JetStream delivery boundary.
@@ -65,6 +66,7 @@ pub struct RuntimeState {
     draining: AtomicBool,
     database: AtomicU8,
     bus: AtomicU8,
+    publisher: PublisherHealth,
 }
 
 impl RuntimeState {
@@ -76,6 +78,7 @@ impl RuntimeState {
             draining: AtomicBool::new(false),
             database: AtomicU8::new(DATABASE_ABSENT),
             bus: AtomicU8::new(BUS_ABSENT),
+            publisher: PublisherHealth::new(),
         }
     }
 
@@ -107,6 +110,12 @@ impl RuntimeState {
         );
     }
 
+    /// The flag the outbox relay updates after every pass. Clones share one state.
+    #[must_use]
+    pub fn publisher_health(&self) -> PublisherHealth {
+        self.publisher.clone()
+    }
+
     /// The broker lane (command consumer, outbox relay, capture resolver) is running.
     pub fn set_bus_running(&self) {
         self.bus.store(BUS_UP, Ordering::Release);
@@ -124,6 +133,7 @@ impl RuntimeState {
         self.startup_complete.load(Ordering::Acquire)
             && !self.draining.load(Ordering::Acquire)
             && self.bus.load(Ordering::Acquire) != BUS_DOWN
+            && !self.publisher.is_failing()
     }
 
     /// The readiness checks, sorted by name so two consecutive bodies are
@@ -164,6 +174,12 @@ impl RuntimeState {
                 name: CheckName::Bus,
                 state: pass(up),
                 reason: (!up).then_some(CheckReason::DependencyUnavailable),
+            });
+            let publishing = !self.publisher.is_failing();
+            checks.push(Check {
+                name: CheckName::BusPublish,
+                state: pass(publishing),
+                reason: (!publishing).then_some(CheckReason::PublishFailing),
             });
         }
 
@@ -206,6 +222,8 @@ pub struct Check {
 pub enum CheckName {
     /// The broker lane's tasks are running. Present only when one is tracked.
     Bus,
+    /// The outbox relay can publish. Present only when a broker lane is tracked.
+    BusPublish,
     /// The database answers. Present only when one is configured.
     Database,
     /// No shutdown signal has arrived.
@@ -236,6 +254,9 @@ pub enum CheckReason {
     ShutdownRequested,
     /// The last probe of the database did not answer.
     DependencyUnavailable,
+    /// The outbox relay runs but its oldest publishable row keeps failing; the NATS server log
+    /// names a Publish Violation when the broker refuses the subject.
+    PublishFailing,
 }
 
 /// The Prometheus text exposition format the `metrics` crate renders.

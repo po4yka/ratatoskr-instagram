@@ -121,8 +121,16 @@ impl BusLane {
         let transport = NatsEventTransport::new(self.context);
         let interval = Duration::from_millis(config.publisher.poll_interval_ms);
         let batch_size = config.publisher.batch_size;
+        let publisher_health = runtime.publisher_health();
         tasks.spawn(async move {
-            relay_outbox(publisher_database, transport, interval, batch_size).await;
+            relay_outbox(
+                publisher_database,
+                transport,
+                interval,
+                batch_size,
+                publisher_health,
+            )
+            .await;
             "outbox relay"
         });
         let resolution = config.public_resolution.clone();

@@ -74,6 +74,16 @@ jobs:
           nats:2-alpine@sha256:d4ac35882ac65aff236cd65b9d3fa4d24332c681e1a85f94eedccd3cdd65b1da
           -js
 
+      # services/instagram-archive/tests/nats_transport.rs starts its own authorization-enabled
+      # broker to prove a refused publish reaches readiness, so it needs the server binary. It is
+      # taken from the pinned image above (a static Go binary), so the gate downloads nothing else.
+      - name: Make the pinned NATS server binary available to the authorization test
+        run: |
+          set -euo pipefail
+          path=$(docker exec ratatoskr-instagram-ci-nats which nats-server)
+          sudo docker cp "ratatoskr-instagram-ci-nats:${path}" /usr/local/bin/nats-server
+          nats-server --version
+
       - name: Show the pinned toolchain
         run: rustup show           # rust-toolchain.toml is the only supported toolchain
 
