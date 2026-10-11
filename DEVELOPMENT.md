@@ -63,6 +63,8 @@ RATATOSKR__BUS__URL=nats://127.0.0.1:14225 cargo run -p ratatoskr-instagram-arch
 # product plane on 127.0.0.1:9083: POST /v1/captures, POST/GET /v1/data-exports
 ```
 
+`deploy/systemd/instagram.conf.example` is the operator example: the loopback listeners `127.0.0.1:9082` and `127.0.0.1:9083`, the database URL, the bus URL with `RATATOSKR__BUS__NKEY_SEED_PATH=/etc/ratatoskr/instagram.nkey`, and the public-resolution keys. `services/instagram-archive/tests/boot.rs::the_shipped_example_loads` loads it through the configuration loader, so it cannot rot. A Meta app access token with `instagram_oembed` access, stored in the file `ACCESS_TOKEN_PATH` names, is an external prerequisite that this repository cannot provision; without it the process refuses to start with a bus configured.
+
 `RATATOSKR__STORAGE__DATABASE_URL=postgres://instagram:instagram@127.0.0.1:5436/instagram` is
 required to start; `<binary> check-config` validates configuration without binding (exit 78 when
 invalid). Both listeners bind loopback only; the product plane trusts its caller to name the acting

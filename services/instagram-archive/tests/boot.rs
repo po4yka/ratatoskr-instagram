@@ -8,6 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use async_nats::jetstream;
+use ratatoskr_instagram_archive::Config;
 use ratatoskr_instagram_archive::test_support::TestDatabase;
 
 const BIN: &str = env!("CARGO_BIN_EXE_ratatoskr-instagram-archive");
@@ -266,4 +267,94 @@ async fn preprovision_browser_capture_consumer() {
         })
         .await
         .expect("the privileged fixture preprovisions the fixed durable");
+}
+
+/// The `KEY=VALUE` lines of a systemd environment file, comments and blank lines dropped.
+#[expect(clippy::expect_used, reason = "boot-test helper; see free_port")]
+fn environment_file_entries(path: &std::path::Path) -> Vec<(String, String)> {
+    std::fs::read_to_string(path)
+        .expect("the shipped example exists (XR-021 CONTRACTS.md R2-10)")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let (key, value) = line.split_once('=').expect("every line is KEY=VALUE");
+            (key.to_owned(), value.to_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn the_shipped_example_loads() {
+    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../deploy/systemd/instagram.conf.example");
+    let entries = environment_file_entries(&example);
+    let value_of = |key: &str| {
+        entries
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value.clone())
+    };
+
+    // The operator-facing values the example promises, as written.
+    assert_eq!(
+        value_of("RATATOSKR__ADMIN__LISTEN_ADDRESS").as_deref(),
+        Some("127.0.0.1:9082")
+    );
+    assert_eq!(
+        value_of("RATATOSKR__API__LISTEN_ADDRESS").as_deref(),
+        Some("127.0.0.1:9083")
+    );
+    assert_eq!(
+        value_of("RATATOSKR__BUS__URL").as_deref(),
+        Some("nats://127.0.0.1:4222")
+    );
+    assert_eq!(
+        value_of("RATATOSKR__BUS__NKEY_SEED_PATH").as_deref(),
+        Some("/etc/ratatoskr/instagram.nkey")
+    );
+    assert!(
+        value_of("RATATOSKR__PUBLIC_RESOLUTION__ENDPOINT")
+            .is_some_and(|endpoint| endpoint.starts_with("https://graph.facebook.com/")),
+        "the Meta oEmbed endpoint is stated"
+    );
+
+    // Loaded through the real loader, with temporary files in place of the absolute secret paths.
+    let directory = std::env::temp_dir().join(format!("instagram-example-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("a scratch directory");
+    let substituted: Vec<(String, String)> = entries
+        .iter()
+        .map(|(key, value)| {
+            if key.ends_with("_PATH") && value.starts_with('/') {
+                let file = directory.join(key);
+                std::fs::write(&file, "placeholder-secret\n").expect("a scratch secret file");
+                (key.clone(), file.display().to_string())
+            } else {
+                (key.clone(), value.clone())
+            }
+        })
+        .collect();
+    let config = Config::from_environment(substituted.clone())
+        .expect("the shipped example is a valid configuration");
+
+    assert_eq!(config.admin.listen_address.to_string(), "127.0.0.1:9082");
+    assert_eq!(config.api.listen_address.to_string(), "127.0.0.1:9083");
+    let bus = config.bus.as_ref().expect("the example configures the bus");
+    assert_eq!(bus.url, "nats://127.0.0.1:4222");
+    assert_eq!(
+        bus.nkey_seed_path.as_deref(),
+        Some(directory.join("RATATOSKR__BUS__NKEY_SEED_PATH").as_path())
+    );
+    assert!(
+        config
+            .public_resolution
+            .endpoint
+            .starts_with("https://graph.facebook.com/"),
+        "the Meta oEmbed endpoint is configured"
+    );
+    config
+        .public_resolution
+        .load_access_token()
+        .expect("the access-token path names a readable token file");
+    std::fs::remove_dir_all(&directory).expect("the scratch directory is removed");
 }

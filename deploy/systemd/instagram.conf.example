@@ -1,0 +1,20 @@
+# /etc/ratatoskr/instagram.conf, root:ratatoskr-instagram 0640. systemd reads it as root and hands the values to the service process, so no secret is world-readable or on a command line.
+
+# The operator plane (/health/live, /health/ready, /metrics, /version) and the product API (POST /v1/captures, data exports). Both bind loopback only and the service refuses any other address. The ports are the allocation in the workspace docs/DEPLOYMENT_TARGET.md.
+RATATOSKR__ADMIN__LISTEN_ADDRESS=127.0.0.1:9082
+RATATOSKR__API__LISTEN_ADDRESS=127.0.0.1:9083
+
+# The archive database. Replace CHANGE-ME with the role's password; the schema is applied by the service itself.
+RATATOSKR__STORAGE__DATABASE_URL=postgres://ratatoskr_instagram:CHANGE-ME@127.0.0.1:5432/ratatoskr_instagram
+
+# The explicit-capture lane needs the bus: the browser-capture command consumer, the outbox relay and the capture resolver all start from it, and without it nothing is published. The URL carries no credential; the identity is the nkey seed in the file below (root:ratatoskr-instagram 0440).
+RATATOSKR__BUS__URL=nats://127.0.0.1:4222
+RATATOSKR__BUS__NKEY_SEED_PATH=/etc/ratatoskr/instagram.nkey
+
+# A configured bus requires the public-resolution surface, or the process exits 78. The file holds one Meta app access token that is allowed to call the instagram_oembed Graph endpoint; it is read once at startup, never logged, and sent only to the Meta Graph host below. Obtaining that token (a Meta app with oEmbed access) is an external prerequisite the service cannot provision.
+RATATOSKR__PUBLIC_RESOLUTION__ENDPOINT=https://graph.facebook.com/v25.0/instagram_oembed
+RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH=/etc/ratatoskr/instagram-meta-token
+# Transient provider failures are retried up to this many attempts (30 s, 2 min, 8 min, 30 min between them) before the operation is reported unavailable. These are the defaults, stated so a deployment can see them.
+RATATOSKR__PUBLIC_RESOLUTION__MAX_ATTEMPTS=5
+RATATOSKR__PUBLIC_RESOLUTION__BATCH_SIZE=8
+RATATOSKR__PUBLIC_RESOLUTION__POLL_INTERVAL_MS=2000
