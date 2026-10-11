@@ -2113,6 +2113,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "metrics",
+ "nkeys",
  "ratatoskr-event-envelope",
  "ratatoskr-instagram-archive",
  "reqwest",

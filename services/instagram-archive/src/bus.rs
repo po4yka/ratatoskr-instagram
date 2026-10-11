@@ -16,7 +16,7 @@ use ratatoskr_instagram_archive::capture_resolution::{CaptureResolver, Resolutio
 use ratatoskr_instagram_archive::public_surface::HttpPublicSurface;
 use ratatoskr_instagram_archive::{BusConfig, Config, Database, PublicResolutionConfig};
 use ratatoskr_instagram_archive_service::RuntimeState;
-use ratatoskr_instagram_archive_service::nats_transport::NatsEventTransport;
+use ratatoskr_instagram_archive_service::nats_transport::{NatsEventTransport, connect_bus};
 use ratatoskr_instagram_archive_service::relay::relay_outbox;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -58,24 +58,9 @@ impl BusLane {
         let surface = HttpPublicSurface::new(&resolution.endpoint, token)
             .map_err(|error| LaneError::Configuration(error.to_string()))?;
 
-        let client = match bus.nkey_seed_path.as_deref() {
-            Some(seed_path) => {
-                let seed = std::fs::read_to_string(seed_path).map_err(|_| {
-                    LaneError::Runtime("the NATS nkey seed could not be read".to_owned())
-                })?;
-                async_nats::ConnectOptions::with_nkey(seed.trim().to_owned())
-                    .connect(&bus.url)
-                    .await
-                    .map_err(|_| {
-                        LaneError::Runtime(
-                            "the NATS broker rejected the configured identity".to_owned(),
-                        )
-                    })?
-            }
-            None => async_nats::connect(&bus.url).await.map_err(|_| {
-                LaneError::Runtime("the NATS broker could not be reached".to_owned())
-            })?,
-        };
+        let client = connect_bus(bus)
+            .await
+            .map_err(|error| LaneError::Runtime(error.to_string()))?;
         let context = jetstream::new(client);
         let consumer: jetstream::consumer::PullConsumer = context
             .get_consumer_from_stream(COMMAND_DURABLE, COMMAND_STREAM)

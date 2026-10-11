@@ -35,6 +35,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
+nkeys = "0.4.5"
 ratatoskr-instagram-archive = { path = "../../crates/instagram-archive", features = ["test-support"] }
 serde_json.workspace = true
 sqlx.workspace = true

@@ -8,8 +8,58 @@
 
 use async_nats::jetstream;
 use ratatoskr_event_envelope::EventEnvelope;
+use ratatoskr_instagram_archive::BusConfig;
 use ratatoskr_instagram_archive::publishing::{EventTransport, TransportError, UndeliverableClass};
 use uuid::Uuid;
+
+/// The inbox prefix of the Instagram identity: the one subject tree its stanza in the deployed ACL
+/// lets it subscribe to (`subscribe.allow = ["_INBOX_instagram.>"]`). Every `JetStream` reply reaches
+/// the service on a subject under it, so a connection without the prefix never receives one.
+pub const INBOX_PREFIX: &str = "_INBOX_instagram";
+
+/// Why the broker connection could not be opened. The text is safe to log: it never carries the
+/// seed or the URL.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum BusConnectError {
+    /// The nkey seed file named by the configuration could not be read.
+    #[error("the NATS nkey seed could not be read")]
+    Seed,
+    /// The broker refused the configured identity.
+    #[error("the NATS broker rejected the configured identity")]
+    Rejected,
+    /// The broker could not be reached.
+    #[error("the NATS broker could not be reached")]
+    Unreachable,
+}
+
+/// Opens the service's one broker connection (XR-021 CONTRACTS.md R3-01).
+///
+/// # Errors
+///
+/// Returns [`BusConnectError::Seed`] when the nkey seed file cannot be read,
+/// [`BusConnectError::Rejected`] when the broker refuses the identity and
+/// [`BusConnectError::Unreachable`] when there is no anonymous broker to reach.
+pub async fn connect_bus(bus: &BusConfig) -> Result<async_nats::Client, BusConnectError> {
+    let (options, failure) = match bus.nkey_seed_path.as_deref() {
+        Some(seed_path) => {
+            let seed = std::fs::read_to_string(seed_path).map_err(|_| BusConnectError::Seed)?;
+            (
+                async_nats::ConnectOptions::with_nkey(seed.trim().to_owned()),
+                BusConnectError::Rejected,
+            )
+        }
+        None => (
+            async_nats::ConnectOptions::new(),
+            BusConnectError::Unreachable,
+        ),
+    };
+    options
+        .custom_inbox_prefix(INBOX_PREFIX)
+        .connect(&bus.url)
+        .await
+        .map_err(|_| failure)
+}
 
 /// The closed set of event types this service publishes, each to `evt.<type>`.
 pub const ALLOWED_EVENT_TYPES: [&str; 4] = [
