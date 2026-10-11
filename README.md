@@ -154,6 +154,8 @@ is invisible to the client and surfaces as a missing acknowledgement: check the 
 for a `Publish Violation`. If the relay, the consumer or the resolver stops, the process flips
 readiness and exits non-zero.
 
+The deployed ACL for the Instagram identity is the single reviewed stanza in `platform/deploy/nats/ratatoskr.conf`; `deploy/nats/identity.conf` is this service's copy of it, which `services/instagram-archive/tests/inbox_prefix.rs` runs on a private broker. The stanza lets the identity subscribe only to `_INBOX_instagram.>`, so `nats_transport::connect_bus`, the one function that opens the broker connection, sets the inbox prefix `_INBOX_instagram`. A build without the prefix cannot complete a JetStream request under that ACL (the call times out), so reload NATS and deploy the services of one snapshot together.
+
 ### Public resolution configuration
 
 The service refuses to start (exit 78) with a bus and no resolution surface, because it would
@@ -442,6 +444,10 @@ not a database migration or legacy import.
 ## Workspace integration
 
 Planned: `ratatoskr-workspace` will pin Instagram with compatible social contracts, Platform, Mobile, Browser Extension, Extractor, Knowledge, and client commits. No workspace pin or integration profile exists for this service today. The connector will remain independently testable with recorded public-resolution fixtures, synthetic exports, and mock OAuth/API servers.
+
+### Deployment
+
+The host runs one PostgreSQL database, `ratatoskr`, and every service connects to it as its own role. Provision this service in this order: Platform's `01-database-and-roles.sql`, the first Edge start, Platform's `02-grants.sql`, then `deploy/postgres/role.sql` of this repository as a PostgreSQL administrator (it creates `ratatoskr_instagram` without a password, with `connect` and `create` on `ratatoskr`; set the password with `\password ratatoskr_instagram`), then the nkey seed at `/etc/ratatoskr/instagram.nkey`, the Meta access token file, `/etc/ratatoskr/instagram.conf` from `deploy/systemd/instagram.conf.example`, and the public key of the Instagram stanza in the NATS `authorization.users` list. The service creates its `instagram_archive` schema from `schema.sql` at start. `compose.yaml` keeps its own development database, which is a development convenience.
 
 ## Project status
 

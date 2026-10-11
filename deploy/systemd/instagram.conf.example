@@ -4,8 +4,8 @@
 RATATOSKR__ADMIN__LISTEN_ADDRESS=127.0.0.1:9082
 RATATOSKR__API__LISTEN_ADDRESS=127.0.0.1:9083
 
-# The archive database. Replace CHANGE-ME with the role's password; the schema is applied by the service itself.
-RATATOSKR__STORAGE__DATABASE_URL=postgres://ratatoskr_instagram:CHANGE-ME@127.0.0.1:5432/ratatoskr_instagram
+# The archive database: the one shared database `ratatoskr`, as the role `ratatoskr_instagram`. A PostgreSQL administrator creates the role with deploy/postgres/role.sql (after Platform's 01-database-and-roles.sql) and sets its password with \password; replace CHANGE-ME with that password. The service applies its own schema, `instagram_archive`, at start.
+RATATOSKR__STORAGE__DATABASE_URL=postgres://ratatoskr_instagram:CHANGE-ME@127.0.0.1:5432/ratatoskr
 
 # The explicit-capture lane needs the bus: the browser-capture command consumer, the outbox relay and the capture resolver all start from it, and without it nothing is published. The URL carries no credential; the identity is the nkey seed in the file below (root:ratatoskr-instagram 0440).
 RATATOSKR__BUS__URL=nats://127.0.0.1:4222

@@ -358,3 +358,56 @@ fn the_shipped_example_loads() {
         .expect("the access-token path names a readable token file");
     std::fs::remove_dir_all(&directory).expect("the scratch directory is removed");
 }
+
+#[test]
+fn the_example_names_the_shared_database_and_the_role_file_exists() {
+    use secrecy::ExposeSecret as _;
+
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let entries =
+        environment_file_entries(&manifest.join("../../deploy/systemd/instagram.conf.example"));
+    let directory = std::env::temp_dir().join(format!("instagram-shared-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("a scratch directory");
+    let substituted: Vec<(String, String)> = entries
+        .into_iter()
+        .map(|(key, value)| {
+            if key.ends_with("_PATH") && value.starts_with('/') {
+                let file = directory.join(&key);
+                std::fs::write(&file, "placeholder-secret\n").expect("a scratch secret file");
+                (key, file.display().to_string())
+            } else {
+                (key, value)
+            }
+        })
+        .collect();
+    let config = Config::from_environment(substituted)
+        .expect("the shipped example is a valid configuration");
+    std::fs::remove_dir_all(&directory).expect("the scratch directory is removed");
+
+    let database_url = config
+        .storage
+        .database_url
+        .as_ref()
+        .expect("the example names the archive database");
+    assert_eq!(
+        database_url.expose_secret(),
+        "postgres://ratatoskr_instagram:CHANGE-ME@127.0.0.1:5432/ratatoskr",
+        "the example connects as its own role to the one shared database on 5432"
+    );
+
+    let role = std::fs::read_to_string(manifest.join("../../deploy/postgres/role.sql"))
+        .expect("deploy/postgres/role.sql creates the role the example names");
+    for required in [
+        "create role ratatoskr_instagram login;",
+        "nosuperuser nocreatedb nocreaterole noreplication nobypassrls",
+        "grant connect, create on database ratatoskr to ratatoskr_instagram;",
+        "\\connect ratatoskr",
+        "revoke all on schema public from ratatoskr_instagram;",
+    ] {
+        assert!(role.contains(required), "role.sql lacks: {required}");
+    }
+    assert!(
+        !role.to_ascii_lowercase().contains("password '"),
+        "no credential belongs in the role file"
+    );
+}
