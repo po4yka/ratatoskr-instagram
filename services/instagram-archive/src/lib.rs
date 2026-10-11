@@ -29,6 +29,8 @@ pub mod command_consumer;
 /// The `JetStream` carrier behind the outbox seam.
 pub mod nats_transport;
 pub mod product;
+/// The outbox relay loop.
+pub mod relay;
 
 pub use product::{
     DataExportRuntime, OfficialAccountRuntime, product_router,

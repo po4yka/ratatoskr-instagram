@@ -17,6 +17,7 @@ use ratatoskr_instagram_archive::public_surface::HttpPublicSurface;
 use ratatoskr_instagram_archive::{BusConfig, Config, Database, PublicResolutionConfig};
 use ratatoskr_instagram_archive_service::RuntimeState;
 use ratatoskr_instagram_archive_service::nats_transport::NatsEventTransport;
+use ratatoskr_instagram_archive_service::relay::relay_outbox;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
@@ -177,37 +178,6 @@ async fn consume_browser_captures(
         };
         ratatoskr_instagram_archive_service::command_consumer::consume_one(&database, &message)
             .await;
-    }
-}
-
-/// Drains the outbox forever, one bounded pass per interval.
-async fn relay_outbox(
-    database: Database,
-    transport: NatsEventTransport,
-    interval: Duration,
-    batch_size: u32,
-) {
-    let mut ticker = tokio::time::interval(interval);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        ticker.tick().await;
-        match ratatoskr_instagram_archive::publishing::run_once(
-            database.pool(),
-            &transport,
-            batch_size,
-        )
-        .await
-        {
-            Ok(summary) if summary.failed > 0 => {
-                tracing::warn!(
-                    failed = summary.failed,
-                    remaining = summary.remaining,
-                    "outbox pass completed with failures"
-                );
-            }
-            Ok(_) => {}
-            Err(error) => tracing::error!(%error, "outbox pass could not run"),
-        }
     }
 }
 
