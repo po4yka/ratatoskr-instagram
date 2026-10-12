@@ -21,6 +21,7 @@ axum.workspace = true
 futures-util.workspace = true
 metrics.workspace = true
 ratatoskr-event-envelope.workspace = true
+ratatoskr-operation-contracts.workspace = true
 ratatoskr-instagram-archive = { path = "../../crates/instagram-archive" }
 reqwest.workspace = true
 secrecy.workspace = true
@@ -35,11 +36,14 @@ uuid.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
+metrics-exporter-prometheus.workspace = true
 nkeys = "0.4.5"
 ratatoskr-instagram-archive = { path = "../../crates/instagram-archive", features = ["test-support"] }
 serde_json.workspace = true
 sqlx.workspace = true
+ratatoskr-social-contracts.workspace = true
 tower.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

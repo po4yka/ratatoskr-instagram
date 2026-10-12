@@ -27,6 +27,8 @@ use serde::Serialize;
 
 /// The provider-specific JetStream delivery boundary.
 pub mod command_consumer;
+/// Knowledge's acknowledgement of a deletion fact.
+pub mod deletion_acks;
 /// The `JetStream` carrier behind the outbox seam.
 pub mod nats_transport;
 pub mod product;

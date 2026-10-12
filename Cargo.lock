@@ -2113,9 +2113,12 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "metrics",
+ "metrics-exporter-prometheus",
  "nkeys",
  "ratatoskr-event-envelope",
  "ratatoskr-instagram-archive",
+ "ratatoskr-operation-contracts",
+ "ratatoskr-social-contracts",
  "reqwest",
  "secrecy",
  "serde",
@@ -2126,6 +2129,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

@@ -1,5 +1,6 @@
-//! The broker-facing tasks of the process: the Platform command consumer, the outbox relay and
-//! the capture resolver (XR-021 CONTRACTS.md S02 rules 3 to 6, S10 CD2).
+//! The broker-facing tasks of the process: the Platform command consumer, the outbox relay, the
+//! consumer of Knowledge's deletion acknowledgements and the capture resolver (XR-021
+//! CONTRACTS.md S02 rules 3 to 6, S10 CD2, R5-11).
 //!
 //! Everything fallible is prepared by [`BusLane::connect`] before readiness can be reported: the
 //! broker connection, the Edge-provisioned durable and the public-resolution surface. Once the
@@ -16,6 +17,7 @@ use ratatoskr_instagram_archive::capture_resolution::{CaptureResolver, Resolutio
 use ratatoskr_instagram_archive::public_surface::HttpPublicSurface;
 use ratatoskr_instagram_archive::{BusConfig, Config, Database, PublicResolutionConfig};
 use ratatoskr_instagram_archive_service::RuntimeState;
+use ratatoskr_instagram_archive_service::deletion_acks::{self, ensure_acks_consumer};
 use ratatoskr_instagram_archive_service::nats_transport::{NatsEventTransport, connect_bus};
 use ratatoskr_instagram_archive_service::relay::relay_outbox;
 use tokio::sync::watch;
@@ -72,6 +74,15 @@ impl BusLane {
                 )
             })?;
         validate_command_consumer(&consumer).map_err(LaneError::Runtime)?;
+        // Knowledge's acknowledgement durable is verified before the process can report ready;
+        // that Knowledge answers is not, a Knowledge outage must not make this service unready.
+        ensure_acks_consumer(
+            &context,
+            deletion_acks::EVENTS_STREAM,
+            deletion_acks::DURABLE,
+        )
+        .await
+        .map_err(|error| LaneError::Runtime(error.to_string()))?;
         let messages = consumer.messages().await.map_err(|_| {
             LaneError::Runtime(
                 "the Instagram command consumer cannot receive deliveries".to_owned(),
@@ -103,6 +114,7 @@ impl BusLane {
             "command consumer"
         });
         let publisher_database = database.clone();
+        let acks_context = self.context.clone();
         let transport = NatsEventTransport::new(self.context);
         let interval = Duration::from_millis(config.publisher.poll_interval_ms);
         let batch_size = config.publisher.batch_size;
@@ -119,6 +131,21 @@ impl BusLane {
             )
             .await;
             "outbox relay"
+        });
+        let acks_database = database.clone();
+        tasks.spawn(async move {
+            if let Err(error) = deletion_acks::consume_deletion_acks(
+                &acks_context,
+                &acks_database,
+                deletion_acks::EVENTS_STREAM,
+                deletion_acks::DURABLE,
+                std::future::pending(),
+            )
+            .await
+            {
+                tracing::error!(%error, "the deletion-acknowledgement consumer stopped");
+            }
+            "deletion-acknowledgement consumer"
         });
         let resolution = config.public_resolution.clone();
         let surface = self.surface;

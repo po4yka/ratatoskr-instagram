@@ -8,7 +8,8 @@
 #![allow(
     clippy::expect_used,
     clippy::panic,
-    reason = "test harness: a broker that cannot start is the failure under test"
+    dead_code,
+    reason = "test harness: a broker that cannot start is the failure under test, and each test binary uses a part of it"
 )]
 
 use std::net::TcpListener;
@@ -27,7 +28,15 @@ pub(crate) struct StanzaBroker {
     port: u16,
     administrator_seed: String,
     instagram_seed_path: PathBuf,
+    knowledge_seed: String,
 }
+
+/// The only subject the test Knowledge identity may publish.
+pub(crate) const ACK_SUBJECT: &str = "evt.knowledge.deletion.acknowledged.v1";
+
+/// The inbox prefix the test Knowledge identity connects under; its stanza lets it subscribe there
+/// and nowhere else.
+pub(crate) const KNOWLEDGE_INBOX_PREFIX: &str = "_INBOX_knowledge";
 
 #[expect(
     clippy::disallowed_methods,
@@ -82,13 +91,17 @@ impl StanzaBroker {
         std::fs::create_dir_all(&directory).expect("the broker directory is created");
         let administrator = nkeys::KeyPair::new_user();
         let instagram = nkeys::KeyPair::new_user();
+        let knowledge = nkeys::KeyPair::new_user();
         let config = format!(
             "listen: 127.0.0.1:{port}\n\
              jetstream {{ store_dir: \"{store}\" }}\n\
-             authorization {{\n  users = [\n{stanza}\n    {{ nkey: {admin} }}\n  ]\n}}\n",
+             authorization {{\n  users = [\n{stanza}\n    {{ nkey: {admin} }}\n    \
+             {{ nkey: {knowledge}, permissions: {{ publish: {{ allow: [\"{ACK_SUBJECT}\"] }}, \
+             subscribe: {{ allow: [\"{KNOWLEDGE_INBOX_PREFIX}.>\"] }} }} }}\n  ]\n}}\n",
             store = directory.join("js").display(),
             stanza = shipped_stanza(&instagram.public_key()),
             admin = administrator.public_key(),
+            knowledge = knowledge.public_key(),
         );
         let config_path = directory.join("nats.conf");
         std::fs::write(&config_path, config).expect("the broker config is written");
@@ -113,6 +126,7 @@ impl StanzaBroker {
             port,
             administrator_seed: administrator.seed().expect("an administrator seed"),
             instagram_seed_path,
+            knowledge_seed: knowledge.seed().expect("a Knowledge seed"),
         };
         broker.wait_until_listening();
         broker
@@ -126,6 +140,11 @@ impl StanzaBroker {
     /// The seed of the administrator that provisions topology.
     pub(crate) fn administrator_seed(&self) -> &str {
         &self.administrator_seed
+    }
+
+    /// The seed of the test Knowledge identity, which may publish only the acknowledgement subject.
+    pub(crate) fn knowledge_seed(&self) -> &str {
+        &self.knowledge_seed
     }
 
     /// The file holding the Instagram identity's seed.

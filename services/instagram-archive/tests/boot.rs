@@ -267,6 +267,29 @@ async fn preprovision_browser_capture_consumer() {
         })
         .await
         .expect("the privileged fixture preprovisions the fixed durable");
+    // Edge also provisions the events stream and the durable of Knowledge's acknowledgements
+    // (XR-021 CONTRACTS.md R5-11); the service verifies it before it reports ready.
+    let events = context
+        .get_or_create_stream(jetstream::stream::Config {
+            name: "ratatoskr_events".to_owned(),
+            subjects: vec!["evt.>".to_owned()],
+            ..jetstream::stream::Config::default()
+        })
+        .await
+        .expect("the privileged fixture creates the events stream");
+    let _: jetstream::consumer::PullConsumer = events
+        .get_or_create_consumer(
+            "ratatoskr_instagram_deletion_acks",
+            jetstream::consumer::pull::Config {
+                durable_name: Some("ratatoskr_instagram_deletion_acks".to_owned()),
+                filter_subject: "evt.knowledge.deletion.acknowledged.v1".to_owned(),
+                ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                ack_wait: std::time::Duration::from_secs(30),
+                ..jetstream::consumer::pull::Config::default()
+            },
+        )
+        .await
+        .expect("the privileged fixture preprovisions the acknowledgement durable");
 }
 
 /// The `KEY=VALUE` lines of a systemd environment file, comments and blank lines dropped.
