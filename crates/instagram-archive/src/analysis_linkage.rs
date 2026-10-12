@@ -11,7 +11,7 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::Database;
-use crate::publishing::{content_digest, source_identity};
+use crate::publishing::{PublishError, current_content_digest, source_identity};
 
 /// Stable inbox consumer identity for Knowledge completion facts.
 const ANALYSIS_CONSUMER: &str = "ratatoskr-instagram-analysis";
@@ -116,9 +116,6 @@ async fn link_matching_capture(
     completion: &SocialSourceAnalysisCompleted,
     completed_at: time::OffsetDateTime,
 ) -> Result<AnalysisCompletionOutcome, sqlx::Error> {
-    if completion.content_digest != content_digest() {
-        return Ok(AnalysisCompletionOutcome::Skipped);
-    }
     let owner = completion.owner.user_id().0;
     let wanted_source = completion.social_source_id.to_string();
     let privacy_removed: bool = sqlx::query_scalar(
@@ -144,6 +141,16 @@ async fn link_matching_capture(
     }) else {
         return Ok(AnalysisCompletionOutcome::Skipped);
     };
+    // The analysis describes the content it was run on: it links only while that content is
+    // still the capture's current state (XR-021 CONTRACTS.md R5-09 rule 3).
+    let current = match current_content_digest(&mut *transaction, capture_id).await {
+        Ok(digest) => digest,
+        Err(PublishError::Persistence(error)) => return Err(error),
+        Err(_) => return Ok(AnalysisCompletionOutcome::Skipped),
+    };
+    if completion.content_digest != current {
+        return Ok(AnalysisCompletionOutcome::Skipped);
+    }
 
     sqlx::query(
         "insert into instagram_archive.capture_analysis_links \
@@ -151,7 +158,7 @@ async fn link_matching_capture(
          on conflict do nothing",
     )
     .bind(capture_id)
-    .bind(completion.content_digest.hex.to_string())
+    .bind(current.hex.to_string())
     .bind(completed_at)
     .execute(&mut *transaction)
     .await?;

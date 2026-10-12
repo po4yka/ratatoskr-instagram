@@ -24,6 +24,7 @@ mod data_export;
 mod health;
 mod operation_report;
 mod pump;
+mod snapshot_digest;
 
 pub(crate) use data_export::append_fact as append_data_export_fact;
 pub use health::PublisherHealth;
@@ -33,6 +34,7 @@ pub use pump::{
     OUTBOX_REDELIVERED_TOTAL, OUTBOX_UNDELIVERABLE_TOTAL, OUTBOX_UNPUBLISHED_DEPTH, PassSummary,
     PassVerdict, TransportError, UndeliverableClass, run_once,
 };
+pub use snapshot_digest::snapshot_content_digest;
 
 /// The platform token every published snapshot carries.
 pub const SOCIAL_PLATFORM: &str = "instagram";
@@ -341,7 +343,7 @@ pub async fn append_fact(
     kind: FactKind,
     capture_id: Uuid,
 ) -> Result<Uuid, PublishError> {
-    let snapshot = build_snapshot(transaction, capture_id).await?;
+    let snapshot = build_snapshot(transaction, capture_id, kind).await?;
     let source_uuid = snapshot.social_source_id.to_string();
     // The bare owner uuid: TenantRef's own Display carries the `user:` kind,
     // and the envelope template adds it back itself.
@@ -549,6 +551,7 @@ pub(crate) async fn append_source_removal_fact(
 async fn build_snapshot(
     connection: &mut PgConnection,
     capture_id: Uuid,
+    kind: FactKind,
 ) -> Result<SocialSourceSnapshot, PublishError> {
     let (owner, canonical_url, acquisition_wire, captured_at): (
         Uuid,
@@ -566,39 +569,43 @@ async fn build_snapshot(
 
     let permalink = crate::permalink::canonicalize(&canonical_url)
         .map_err(|_| PublishError::InvalidStoredPermalink(capture_id))?;
-    let acquisition = match acquisition_wire.as_str() {
-        "official_api" => AcquisitionMethod::OfficialApi,
-        "share_extension" => AcquisitionMethod::ShareExtension,
-        "browser_extension" => AcquisitionMethod::BrowserExtension,
-        "public_resolution" => AcquisitionMethod::PublicResolution,
-        "data_export" => AcquisitionMethod::DataExport,
-        "legacy_import" => AcquisitionMethod::LegacyImport,
-        other => {
-            return Err(PublishError::ContractViolation(
-                capture_id,
-                format!("unknown acquisition token {other}"),
-            ));
-        }
-    };
+    let acquisition = acquisition_from_token(capture_id, &acquisition_wire)?;
 
     // Normalized content of the newest revision; nothing here is invented.
     // Media bytes are never archived by this lane yet, so media stays empty
     // and completeness declares partial with the warning naming the gap.
-    let Some((caption, raw_blob_hex, byte_size, upstream_status)) =
-        sqlx::query_as::<_, (Option<String>, String, i64, Option<String>)>(
-            "select m.caption, b.blob_ref, b.byte_size, m.upstream_status \
+    // `observed_at` is when the current state was observed: the newest of the capture's own
+    // time, the current revision's resolution and the projection's last observation (a deletion
+    // upstream appends no revision but moves the projection).
+    let Some((caption, raw_blob_hex, byte_size, upstream_status, observed_at)) = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            String,
+            i64,
+            Option<String>,
+            time::OffsetDateTime,
+        ),
+    >(
+        "select m.caption, b.blob_ref, b.byte_size, m.upstream_status, \
+                    greatest(c.captured_at, r.resolved_at, m.updated_at) \
          from instagram_archive.captures c \
          join instagram_archive.media m on m.media_id = c.media_id \
          join instagram_archive.media_revisions r on r.revision_id = m.current_revision_id \
          join instagram_archive.raw_records b on b.raw_record_id = r.raw_record_id \
          where c.capture_id = $1",
-        )
-        .bind(capture_id)
-        .fetch_optional(&mut *connection)
-        .await
-        .map_err(PublishError::Persistence)?
+    )
+    .bind(capture_id)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(PublishError::Persistence)?
     else {
         return Err(PublishError::NothingToPublish(capture_id));
+    };
+    // A captured fact keeps the capture's own time; an updated fact is observed later.
+    let fact_time = match kind {
+        FactKind::Captured => captured_at,
+        FactKind::Updated => observed_at,
     };
 
     let text = match caption {
@@ -613,7 +620,11 @@ async fn build_snapshot(
         Some(_) => UpstreamAvailability::Unavailable,
     };
 
-    Ok(SocialSourceSnapshot {
+    let raw_digest = ContentDigest {
+        algorithm: DigestAlgorithm::Sha256,
+        hex: DigestHex::parse(&raw_blob_hex).map_err(|error| violation(capture_id, &error))?,
+    };
+    let mut snapshot = SocialSourceSnapshot {
         social_source_id: parse_source_id(source_identity(owner, &permalink.url), capture_id)?,
         platform: Platform::parse(SOCIAL_PLATFORM)
             .map_err(|error| violation(capture_id, &error))?,
@@ -625,20 +636,17 @@ async fn build_snapshot(
         owner: owner_ref(owner, capture_id)?,
         author: None,
         published_at: None,
-        captured_at: instant_from_time(captured_at, capture_id)?,
+        captured_at: instant_from_time(fact_time, capture_id)?,
         text,
         media: Vec::new(),
         relations: Vec::new(),
         folders: Vec::new(),
-        content_digest: content_digest(),
+        // Replaced below by the digest of the snapshot itself, which needs every other field.
+        content_digest: raw_digest.clone(),
         raw_blob: Some(BlobRef {
             owner_service: BlobOwner::parse(PRODUCER_NAME)
                 .map_err(|error| violation(capture_id, &error))?,
-            digest: ContentDigest {
-                algorithm: DigestAlgorithm::Sha256,
-                hex: DigestHex::parse(&raw_blob_hex)
-                    .map_err(|error| violation(capture_id, &error))?,
-            },
+            digest: raw_digest,
             media_type: MediaType::parse("application/json")
                 .map_err(|error| violation(capture_id, &error))?,
             length_bytes: u64::try_from(byte_size)
@@ -651,7 +659,41 @@ async fn build_snapshot(
         checkpoint: None,
         warnings: vec![media_warning()],
         extensions: Extensions::default(),
+    };
+    snapshot.content_digest = snapshot_content_digest(&snapshot);
+    Ok(snapshot)
+}
+
+/// Maps the stored acquisition token to the contract vocabulary; an unknown token fails
+/// construction rather than being coerced.
+fn acquisition_from_token(
+    capture_id: Uuid,
+    token: &str,
+) -> Result<AcquisitionMethod, PublishError> {
+    Ok(match token {
+        "official_api" => AcquisitionMethod::OfficialApi,
+        "share_extension" => AcquisitionMethod::ShareExtension,
+        "browser_extension" => AcquisitionMethod::BrowserExtension,
+        "public_resolution" => AcquisitionMethod::PublicResolution,
+        "data_export" => AcquisitionMethod::DataExport,
+        "legacy_import" => AcquisitionMethod::LegacyImport,
+        other => {
+            return Err(PublishError::ContractViolation(
+                capture_id,
+                format!("unknown acquisition token {other}"),
+            ));
+        }
     })
+}
+
+/// The digest of the capture's current snapshot, read from stored rows with the function the
+/// publisher uses, so a completion can be matched against what is current.
+pub(crate) async fn current_content_digest(
+    connection: &mut PgConnection,
+    capture_id: Uuid,
+) -> Result<ContentDigest, PublishError> {
+    let snapshot = build_snapshot(connection, capture_id, FactKind::Captured).await?;
+    Ok(snapshot.content_digest)
 }
 
 #[expect(
@@ -668,25 +710,6 @@ fn media_warning() -> WarningEnvelope {
         .expect("a static message literal parses"),
         field_path: None,
         extensions: Extensions::default(),
-    }
-}
-
-/// Digest over the normalized content shape this producer publishes today:
-/// metadata-only oEmbed normalization with no archived media bytes. Stable
-/// across emissions so consumer-side recomputation mismatches mean corruption.
-#[expect(
-    clippy::expect_used,
-    reason = "the hex is self-produced SHA-256; it parses or the hasher is broken"
-)]
-pub(crate) fn content_digest() -> ContentDigest {
-    let mut hex = String::with_capacity(64);
-    for byte in sha2::Sha256::digest(b"instagram/oembed-metadata-only/v1") {
-        use std::fmt::Write as _;
-        let _ = write!(hex, "{byte:02x}");
-    }
-    ContentDigest {
-        algorithm: DigestAlgorithm::Sha256,
-        hex: DigestHex::parse(&hex).expect("a self-produced SHA-256 hex parses"),
     }
 }
 
