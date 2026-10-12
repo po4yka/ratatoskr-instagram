@@ -614,7 +614,9 @@ Capture and account-connection deletion use a closed inventory of every owned re
 blob class. Target ownership, deterministic planning, erasure, content-free audit/effects, local
 removal guards, blob tasks, and canonical downstream deletion requests share one transaction.
 Independent explicit-capture/Data Export holdings survive connection deletion. Downstream Knowledge
-consumption is asynchronous and is never inferred from local commit.
+consumption is asynchronous and is never inferred from local commit: a removal fact is published
+again, unchanged, until Knowledge's `knowledge.deletion.acknowledged.v1` sets `acknowledged_at` on its
+outbox row, and no deletion path removes an unacknowledged removal (XR-021 CONTRACTS.md R5-11).
 
 Recent due captures re-enter the supported public-resolution pipeline only after owner/privacy and
 finite item/request/byte/deadline/concurrency/provider guards pass immediately before I/O. Raw

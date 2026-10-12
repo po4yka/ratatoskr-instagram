@@ -120,9 +120,10 @@ The service requires `RATATOSKR__BUS__URL` and runs durable consumer
 `cmd.instagram.capture.requested.v1`. It validates the canonical command envelope and closed
 Instagram provenance before writing the owned inbox and capture record. A configured broker that
 cannot authenticate, connect, or expose the preprovisioned
-`ratatoskr_instagram_browser_capture` durable on `ratatoskr_commands` prevents startup. Platform
-provisions that fixed consumer; the deployment identity needs subscribe permission for that command
-subject and must not hold broad `$JS.API.>` permission.
+`ratatoskr_instagram_browser_capture` durable on `ratatoskr_commands`, or the preprovisioned
+`ratatoskr_instagram_deletion_acks` durable on `ratatoskr_events`, prevents startup. Platform
+provisions those fixed consumers; the deployment identity needs subscribe permission for that
+command subject and must not hold broad `$JS.API.>` permission.
 
 ### Operation lifecycle (XR-021 CONTRACTS.md S10 CD1, CD2, CD7)
 
@@ -153,6 +154,12 @@ The outbox relay publishes the stored envelopes to JetStream (`evt.platform.oper
 is invisible to the client and surfaces as a missing acknowledgement: check the NATS server log
 for a `Publish Violation`. If the relay, the consumer or the resolver stops, the process flips
 readiness and exits non-zero.
+
+### Removal acknowledgement (XR-021 CONTRACTS.md R5-11)
+
+The events stream drops its oldest messages after 7 days or at 1 GiB, so a `social.source.removed.v1` fact that Knowledge has not consumed in time would be lost silently. The relay therefore keeps such a row: it arms `next_resend_at` when it marks the row published, publishes the stored bytes again, with the same event id and the same `Nats-Msg-Id`, whenever the row is due and unacknowledged, and doubles the delay after each copy up to a cap. The delay starts at `RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS` (default 600, 30 to 86400) and is capped at `RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS` (default 21600, at most 604800). The events stream collapses a repeated message id inside its 120 second duplicate window, so a resend sooner than that changes nothing at the broker; a native smoke that wants to see a second stream copy sets at least 150. The resend stops only when `acknowledged_at` is set.
+
+The service consumes the Edge-provisioned durable `ratatoskr_instagram_deletion_acks` (events stream, filter `evt.knowledge.deletion.acknowledged.v1`, explicit acknowledgement, 30 second ack wait), verifies it before the process can report ready and never creates it. A valid acknowledgement from `ratatoskr-knowledge` sets `acknowledged_at` and `ack_outcome` on the removal with the same id and tenant. An outcome of `refused` also ends the resend, raises an ERROR log line with ids only and increments `instagram_tombstone_refused_total`: the data stays in Knowledge and an operator must look. An acknowledgement that names no removal of this service is acknowledged and ignored, and a message that is not a valid acknowledgement from Knowledge is terminated. The gauges `instagram_unacknowledged_tombstones` and `instagram_oldest_unacknowledged_tombstone_age_seconds` are served on the operator listener, and readiness does not depend on them: a Knowledge outage must not make this service unready. The owner's privacy deletion keeps a removal that Knowledge has not acknowledged.
 
 The deployed ACL for the Instagram identity is the single reviewed stanza in `platform/deploy/nats/ratatoskr.conf`; `deploy/nats/identity.conf` is this service's copy of it, which `services/instagram-archive/tests/inbox_prefix.rs` runs on a private broker. The stanza lets the identity subscribe only to `_INBOX_instagram.>`, so `nats_transport::connect_bus`, the one function that opens the broker connection, sets the inbox prefix `_INBOX_instagram`. A build without the prefix cannot complete a JetStream request under that ACL (the call times out), so reload NATS and deploy the services of one snapshot together.
 
@@ -202,7 +209,7 @@ The intake surface is implemented on this service's product listener (`POST /v1/
 2. deduplicates on `(user_ref, canonical_url)`: a repeated delivery of the same share reuses the original capture untouched, whatever the new timestamp, note, client source, or idempotency key;
 3. stores the capture with provenance fixed at `explicit_user_capture` and the acquisition method implied by the client source; the platform `Idempotency-Key` is kept for correlation only;
 4. when public resolution fails, appends an availability observation and marks the capture `unavailable`, preserving the URL, save time, and note truthfully instead of fabricating content;
-5. publishes `social.source.captured.v1` at first preservation and `social.source.updated.v1` when the stored normalized record changes;
+5. publishes `social.source.captured.v1` at first preservation and `social.source.updated.v1` when the stored normalized record changes. The `content_digest` of a fact is the SHA-256 of the canonical JSON of what the snapshot states (domain `instagram.snapshot-content`, permalink, shortcode, caption, upstream availability, media), so a changed caption or a post deleted upstream is a new digest and Knowledge analyses it; an updated fact carries the instant the change was observed as `captured_at`, and a captured fact carries the capture time (XR-021 CONTRACTS.md R5-09);
 6. provides those preserved facts as Knowledge's analysis request flow, records its typed completion linkage locally, and publishes `social.source.removed.v1` if the local capture is tombstoned.
 
 Step 4's resolver exists as of plan item 4: a successful answer stores the raw payload as an immutable parser-versioned revision, normalizes it deterministically into `media`, links the capture, and appends an `available` observation; a failed answer records its kind verbatim. The fallback record shape both paths write is tested today.
@@ -443,7 +450,7 @@ not a database migration or legacy import.
 
 ## Workspace integration
 
-`ratatoskr-workspace` pins this service (`workspace.toml` entry `instagram` in the `social` profile, with the commit in `workspace.lock`) and its harness checks it against the rest of the fleet: the operator listener `9082` and the product API `9083` in the port allocation table of `docs/DEPLOYMENT_TARGET.md`, the Instagram stanza and the Edge-provisioned durable `ratatoskr_instagram_browser_capture` in the bus ACL and durable checks. No composed Compose profile starts this service, and the cross-service evidence, the native smoke of changeset XR-021, has not run the social-capture flow for Instagram, so no end-to-end claim is made. The success path of public resolution against Meta needs a Meta app access token with `instagram_oembed` access, which this repository cannot provision. The connector stays independently testable with recorded public-resolution fixtures, synthetic exports, and mock OAuth/API servers.
+`ratatoskr-workspace` pins this service (`workspace.toml` entry `instagram` in the `social` profile, with the commit in `workspace.lock`) and its harness checks it against the rest of the fleet: the operator listener `9082` and the product API `9083` in the port allocation table of `docs/DEPLOYMENT_TARGET.md`, the Instagram stanza and the Edge-provisioned durables `ratatoskr_instagram_browser_capture` and `ratatoskr_instagram_deletion_acks` in the bus ACL and durable checks. No composed Compose profile starts this service, and the cross-service evidence, the native smoke of changeset XR-021, has not run the social-capture flow for Instagram, so no end-to-end claim is made. The success path of public resolution against Meta needs a Meta app access token with `instagram_oembed` access, which this repository cannot provision. The connector stays independently testable with recorded public-resolution fixtures, synthetic exports, and mock OAuth/API servers.
 
 ### Deployment
 

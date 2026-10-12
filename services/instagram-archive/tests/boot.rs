@@ -341,6 +341,15 @@ fn the_shipped_example_loads() {
             .is_some_and(|endpoint| endpoint.starts_with("https://graph.facebook.com/")),
         "the Meta oEmbed endpoint is stated"
     );
+    // The removal resend timing is stated at its defaults (XR-021 CONTRACTS.md R5-11).
+    assert_eq!(
+        value_of("RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS").as_deref(),
+        Some("600")
+    );
+    assert_eq!(
+        value_of("RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS").as_deref(),
+        Some("21600")
+    );
 
     // Loaded through the real loader, with temporary files in place of the absolute secret paths.
     let directory = std::env::temp_dir().join(format!("instagram-example-{}", std::process::id()));
@@ -362,6 +371,13 @@ fn the_shipped_example_loads() {
 
     assert_eq!(config.admin.listen_address.to_string(), "127.0.0.1:9082");
     assert_eq!(config.api.listen_address.to_string(), "127.0.0.1:9083");
+    assert_eq!(
+        (
+            config.tombstone.resend_after_seconds,
+            config.tombstone.resend_cap_seconds
+        ),
+        (600, 21_600)
+    );
     let bus = config.bus.as_ref().expect("the example configures the bus");
     assert_eq!(bus.url, "nats://127.0.0.1:4222");
     assert_eq!(

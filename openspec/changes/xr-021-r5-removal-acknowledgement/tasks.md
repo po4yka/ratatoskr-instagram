@@ -10,6 +10,6 @@ Behaviour tasks run against the disposable-database harness (real PostgreSQL) an
 - [x] 3.2 GREEN: use `not (event_type = 'social.source.removed.v1' and acknowledged_at is null)` in both statements of `privacy_deletion/apply.rs`.
 - [x] 4.1 RED: Add `services/instagram-archive/tests/deletion_acks.rs` against a broker running the shipped stanza with a Knowledge identity and the Edge-provisioned durable, the three permissions in `deploy/nats/identity.conf`, and a signature-only `deletion_acks::consume_deletion_acks` that stops at once. Expected failure: the acknowledgement never reaches the row and the consumer-start assertion fails.
 - [x] 4.2 GREEN: implement the supervised consumer, the metrics, the durable verification at lane start and the wiring in `bus.rs`, `relay.rs` and `main.rs`.
-- [ ] 5.1 RED: Extend `services/instagram-archive/tests/boot.rs::the_shipped_example_loads` to require the two tombstone keys at their defaults in `deploy/systemd/instagram.conf.example`. Expected failure: the example does not set them.
-- [ ] 5.2 Documentation and configuration (no failing test can precede them beyond 5.1): the conf example, `README.md` and `DEVELOPMENT.md`.
+- [x] 5.1 RED: Extend `services/instagram-archive/tests/boot.rs::the_shipped_example_loads` to require the two tombstone keys at their defaults in `deploy/systemd/instagram.conf.example`. Expected failure: the example does not set them.
+- [x] 5.2 Documentation and configuration (no failing test can precede them beyond 5.1): the conf example, `README.md` and `DEVELOPMENT.md`.
 - [ ] 6.1 Gate: the full command list from `DEVELOPMENT.md`, `cargo deny --locked check`, the 850-line check, `git diff --check` and `openspec validate --all --strict`; tick tasks only with evidence.
