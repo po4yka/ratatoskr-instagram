@@ -21,7 +21,7 @@ use ratatoskr_instagram_archive::privacy_deletion::{
     DeletionRequest, DeletionStore, DeletionTarget,
 };
 use ratatoskr_instagram_archive::publishing::{
-    EventTransport, FactKind, PublishError, TransportError, run_once, source_identity,
+    EventTransport, FactKind, PublishError, ResendPolicy, TransportError, run_once, source_identity,
 };
 use ratatoskr_instagram_archive::resolution::{PublicSurface, ResolutionOutcome, SurfaceOutcome};
 use ratatoskr_instagram_archive::test_support::TestDatabase;
@@ -759,7 +759,7 @@ async fn redelivery_is_byte_identical() {
         attempts: Mutex::new(Vec::new()),
     };
 
-    let failed = run_once(test.database.pool(), &transport, 8)
+    let failed = run_once(test.database.pool(), &transport, 8, ResendPolicy::default())
         .await
         .expect("the failing pass completes");
     assert_eq!(
@@ -774,7 +774,7 @@ async fn redelivery_is_byte_identical() {
         .await
         .expect("the backoff is elapsed");
 
-    let succeeded = run_once(test.database.pool(), &transport, 8)
+    let succeeded = run_once(test.database.pool(), &transport, 8, ResendPolicy::default())
         .await
         .expect("the recovering pass completes");
     assert_eq!(succeeded.delivered, 1);

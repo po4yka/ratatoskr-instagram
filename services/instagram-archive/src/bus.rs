@@ -14,6 +14,7 @@ use async_nats::jetstream;
 use futures_util::StreamExt as _;
 use ratatoskr_instagram_archive::capture_resolution::{CaptureResolver, ResolutionPolicy};
 use ratatoskr_instagram_archive::public_surface::HttpPublicSurface;
+use ratatoskr_instagram_archive::publishing::ResendPolicy;
 use ratatoskr_instagram_archive::{BusConfig, Config, Database, PublicResolutionConfig};
 use ratatoskr_instagram_archive_service::RuntimeState;
 use ratatoskr_instagram_archive_service::nats_transport::{NatsEventTransport, connect_bus};
@@ -113,6 +114,7 @@ impl BusLane {
                 transport,
                 interval,
                 batch_size,
+                ResendPolicy::default(),
                 publisher_health,
             )
             .await;

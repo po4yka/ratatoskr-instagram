@@ -3,6 +3,7 @@
 use uuid::Uuid;
 
 use super::PRODUCER_NAME;
+use super::removal_ack::{ResendPolicy, mark_published, refresh_gauges, resend_due};
 
 /// Metric names emitted by the publisher pass; rendered on `/metrics`.
 /// Counter of facts delivered and marked published.
@@ -108,6 +109,10 @@ pub struct PassSummary {
     pub failed: u32,
     /// Facts that can never be delivered; they were marked undeliverable and left the queue.
     pub undeliverable: u32,
+    /// Removals published again because Knowledge had not acknowledged them.
+    pub resent: u32,
+    /// Republishes of a removal that failed; they back off and never feed the verdict.
+    pub resend_failed: u32,
     /// Publishable facts still waiting after this pass (undeliverable rows excluded).
     pub remaining: u64,
     /// What this pass says about the publisher's health.
@@ -133,6 +138,7 @@ pub async fn run_once<T: EventTransport>(
     pool: &sqlx::PgPool,
     transport: &T,
     batch: u32,
+    resend: ResendPolicy,
 ) -> Result<PassSummary, sqlx::Error> {
     let mut summary = PassSummary::default();
 
@@ -154,7 +160,8 @@ pub async fn run_once<T: EventTransport>(
         }
         match transport.deliver(event_id, &body).await {
             Ok(()) => {
-                mark_published(pool, event_id).await?;
+                mark_published(pool, event_id, resend).await?;
+                metrics::counter!(OUTBOX_DELIVERED_TOTAL).increment(1);
                 summary.delivered += 1;
             }
             Err(TransportError::Undeliverable(class)) => {
@@ -169,6 +176,13 @@ pub async fn run_once<T: EventTransport>(
             }
         }
     }
+
+    if summary.failed == 0 {
+        let report = resend_due(pool, transport, batch, resend).await?;
+        summary.resent = report.resent;
+        summary.resend_failed = report.failed;
+    }
+    refresh_gauges(pool).await?;
 
     let (remaining,): (i64,) = sqlx::query_as(
         "select count(*) from instagram_archive.outbox_events \
@@ -187,19 +201,6 @@ pub async fn run_once<T: EventTransport>(
     }
 
     Ok(summary)
-}
-
-async fn mark_published(pool: &sqlx::PgPool, event_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "update instagram_archive.outbox_events \
-         set published_at = now() \
-         where event_id = $1 and published_at is null",
-    )
-    .bind(event_id)
-    .execute(pool)
-    .await?;
-    metrics::counter!(OUTBOX_DELIVERED_TOTAL).increment(1);
-    Ok(())
 }
 
 async fn mark_undeliverable(
@@ -222,7 +223,7 @@ async fn mark_undeliverable(
     Ok(())
 }
 
-async fn record_transient_failure(
+pub(super) async fn record_transient_failure(
     pool: &sqlx::PgPool,
     event_id: Uuid,
     error: &TransportError,

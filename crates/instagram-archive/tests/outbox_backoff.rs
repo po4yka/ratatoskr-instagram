@@ -9,7 +9,7 @@
 use std::sync::Mutex;
 
 use metrics_exporter_prometheus::PrometheusBuilder;
-use ratatoskr_instagram_archive::publishing::{PassVerdict, run_once};
+use ratatoskr_instagram_archive::publishing::{PassVerdict, ResendPolicy, run_once};
 use ratatoskr_instagram_archive::test_support::TestDatabase;
 use ratatoskr_instagram_archive::{EventTransport, TransportError, UndeliverableClass};
 use serde_json::json;
@@ -63,7 +63,7 @@ async fn failing_rows_do_not_starve_later_rows() {
         delivered: Mutex::new(Vec::new()),
     };
 
-    let first = run_once(test.database.pool(), &transport, 1)
+    let first = run_once(test.database.pool(), &transport, 1, ResendPolicy::default())
         .await
         .expect("the first pass runs");
     assert_eq!(
@@ -86,7 +86,7 @@ async fn failing_rows_do_not_starve_later_rows() {
         "a safe error class is kept"
     );
 
-    let second = run_once(test.database.pool(), &transport, 1)
+    let second = run_once(test.database.pool(), &transport, 1, ResendPolicy::default())
         .await
         .expect("the second pass runs");
     assert_eq!(
@@ -145,9 +145,14 @@ async fn an_oversize_envelope_is_undeliverable_and_later_rows_publish() {
         attempts: Mutex::new(Vec::new()),
     };
 
-    let pass = run_once(test.database.pool(), &transport, 16)
-        .await
-        .expect("the pass runs");
+    let pass = run_once(
+        test.database.pool(),
+        &transport,
+        16,
+        ResendPolicy::default(),
+    )
+    .await
+    .expect("the pass runs");
 
     assert_eq!(
         (
@@ -183,9 +188,14 @@ async fn an_oversize_envelope_is_undeliverable_and_later_rows_publish() {
         recorder.render()
     );
 
-    let again = run_once(test.database.pool(), &transport, 16)
-        .await
-        .expect("the second pass runs");
+    let again = run_once(
+        test.database.pool(),
+        &transport,
+        16,
+        ResendPolicy::default(),
+    )
+    .await
+    .expect("the second pass runs");
     assert_eq!(
         (again.delivered, again.failed, again.undeliverable),
         (0, 0, 0)
@@ -223,9 +233,14 @@ async fn a_failing_row_flips_the_verdict_from_its_third_attempt() {
     let mut verdicts = Vec::new();
     for _ in 0..3 {
         make_due(&test, head).await;
-        let pass = run_once(test.database.pool(), &transport, 16)
-            .await
-            .expect("the pass runs");
+        let pass = run_once(
+            test.database.pool(),
+            &transport,
+            16,
+            ResendPolicy::default(),
+        )
+        .await
+        .expect("the pass runs");
         assert_eq!(pass.failed, 1);
         verdicts.push(pass.verdict);
     }
@@ -239,9 +254,14 @@ async fn a_failing_row_flips_the_verdict_from_its_third_attempt() {
         "two failed attempts are tolerated and the third reports a failing publisher"
     );
 
-    let waiting = run_once(test.database.pool(), &transport, 16)
-        .await
-        .expect("the pass runs");
+    let waiting = run_once(
+        test.database.pool(),
+        &transport,
+        16,
+        ResendPolicy::default(),
+    )
+    .await
+    .expect("the pass runs");
     assert_eq!(
         (waiting.failed, waiting.verdict),
         (0, PassVerdict::Waiting),
@@ -262,9 +282,14 @@ async fn a_row_older_than_five_minutes_that_fails_reports_a_failing_publisher() 
         delivered: Mutex::new(Vec::new()),
     };
 
-    let pass = run_once(test.database.pool(), &transport, 16)
-        .await
-        .expect("the pass runs");
+    let pass = run_once(
+        test.database.pool(),
+        &transport,
+        16,
+        ResendPolicy::default(),
+    )
+    .await
+    .expect("the pass runs");
 
     assert_eq!((pass.failed, pass.verdict), (1, PassVerdict::Failing));
     test.cleanup()
@@ -281,7 +306,7 @@ async fn a_clean_pass_after_failures_is_healthy() {
         poisoned: head,
         delivered: Mutex::new(Vec::new()),
     };
-    run_once(test.database.pool(), &failing, 16)
+    run_once(test.database.pool(), &failing, 16, ResendPolicy::default())
         .await
         .expect("the failing pass runs");
 
@@ -290,9 +315,14 @@ async fn a_clean_pass_after_failures_is_healthy() {
         poisoned: Uuid::nil(),
         delivered: Mutex::new(Vec::new()),
     };
-    let pass = run_once(test.database.pool(), &recovering, 16)
-        .await
-        .expect("the clean pass runs");
+    let pass = run_once(
+        test.database.pool(),
+        &recovering,
+        16,
+        ResendPolicy::default(),
+    )
+    .await
+    .expect("the clean pass runs");
 
     assert_eq!(
         (pass.delivered, pass.remaining, pass.verdict),

@@ -17,7 +17,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt as _;
 use ratatoskr_instagram_archive::UndeliverableClass;
-use ratatoskr_instagram_archive::publishing::{EventTransport as _, TransportError};
+use ratatoskr_instagram_archive::publishing::{EventTransport as _, ResendPolicy, TransportError};
 use ratatoskr_instagram_archive::test_support::TestDatabase;
 use ratatoskr_instagram_archive_service::nats_transport::NatsEventTransport;
 use ratatoskr_instagram_archive_service::relay::relay_outbox;
@@ -334,6 +334,7 @@ async fn a_refused_publish_flips_readiness_until_a_clean_pass() {
         NatsEventTransport::new(context),
         Duration::from_millis(50),
         16,
+        ResendPolicy::default(),
         runtime.publisher_health(),
     ));
     // The outbox backoff is 60 seconds; the test moves the clock instead of waiting for it.

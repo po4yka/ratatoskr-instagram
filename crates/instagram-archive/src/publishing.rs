@@ -24,6 +24,7 @@ mod data_export;
 mod health;
 mod operation_report;
 mod pump;
+mod removal_ack;
 mod snapshot_digest;
 
 pub(crate) use data_export::append_fact as append_data_export_fact;
@@ -33,6 +34,11 @@ pub use pump::{
     EventTransport, OUTBOX_DELIVERED_TOTAL, OUTBOX_FAILED_TOTAL, OUTBOX_PUBLISHER_FAILING_TOTAL,
     OUTBOX_REDELIVERED_TOTAL, OUTBOX_UNDELIVERABLE_TOTAL, OUTBOX_UNPUBLISHED_DEPTH, PassSummary,
     PassVerdict, TransportError, UndeliverableClass, run_once,
+};
+pub use removal_ack::{
+    AckOutcome, OLDEST_UNACKNOWLEDGED_TOMBSTONE_AGE_SECONDS, REMOVAL_EVENT_TYPE, ResendPolicy,
+    TOMBSTONE_REFUSED_TOTAL, TOMBSTONE_RESENT_TOTAL, UNACKNOWLEDGED_TOMBSTONES,
+    UnacknowledgedRemovals, acknowledge, unacknowledged_removals,
 };
 pub use snapshot_digest::snapshot_content_digest;
 

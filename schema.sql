@@ -780,12 +780,24 @@ create table instagram_archive.outbox_events (
     next_attempt_at timestamptz,
     last_error      text,
     undeliverable_at timestamptz,
+    acknowledged_at timestamptz,
+    ack_outcome     text,
+    resend_count    integer     not null default 0,
+    next_resend_at  timestamptz,
     constraint outbox_events_aggregate_type_check
         check (aggregate_type in ('capture', 'media', 'account', 'import', 'operation')),
     constraint outbox_events_event_type_check
         check (event_type in
             ('platform.operation.reported.v1', 'social.source.captured.v1',
-             'social.source.updated.v1', 'social.source.removed.v1'))
+             'social.source.updated.v1', 'social.source.removed.v1')),
+    constraint outbox_events_ack_outcome_check
+        check (ack_outcome in ('applied', 'refused')),
+    constraint outbox_events_ack_pair_check
+        check ((acknowledged_at is null) = (ack_outcome is null)),
+    constraint outbox_events_resend_count_check check (resend_count >= 0),
+    constraint outbox_events_resend_removal_only_check
+        check (event_type = 'social.source.removed.v1'
+               or (acknowledged_at is null and resend_count = 0 and next_resend_at is null))
 );
 
 comment on table instagram_archive.outbox_events is
@@ -794,9 +806,17 @@ comment on table instagram_archive.outbox_events is
 comment on column instagram_archive.outbox_events.undeliverable_at is
     'Set when no retry can deliver the row (last_error holds the closed class, for example payload_too_large). The relay never selects such a row again and it does not count as unpublished work.';
 
+comment on column instagram_archive.outbox_events.next_resend_at is
+    'Removal acknowledgement (XR-021 CONTRACTS.md R5-11). Only social.source.removed.v1 rows use acknowledged_at, ack_outcome, resend_count and next_resend_at. The events stream drops its oldest messages, so a removal that Knowledge has not acknowledged is published again, unchanged, until acknowledged_at is set: next_resend_at is when the next copy is due (armed when the row is marked published), resend_count doubles the delay up to the configured cap, and ack_outcome records what Knowledge did (refused stops the resend too, and an operator must look).';
+
 create index outbox_events_unpublished_idx
     on instagram_archive.outbox_events (next_attempt_at)
     where published_at is null and undeliverable_at is null;
+
+-- The resend pass and the tombstone gauges read only the removals Knowledge has not acknowledged.
+create index outbox_events_unacknowledged_removal_idx
+    on instagram_archive.outbox_events (next_resend_at)
+    where event_type = 'social.source.removed.v1' and acknowledged_at is null;
 
 create unique index outbox_events_own_media_content_key
     on instagram_archive.outbox_events

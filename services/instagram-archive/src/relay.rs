@@ -6,7 +6,9 @@
 use std::time::Duration;
 
 use ratatoskr_instagram_archive::Database;
-use ratatoskr_instagram_archive::publishing::{EventTransport, PublisherHealth, run_once};
+use ratatoskr_instagram_archive::publishing::{
+    EventTransport, PublisherHealth, ResendPolicy, run_once,
+};
 
 /// Drains the outbox forever, one bounded pass per interval.
 pub async fn relay_outbox<T: EventTransport>(
@@ -14,13 +16,14 @@ pub async fn relay_outbox<T: EventTransport>(
     transport: T,
     interval: Duration,
     batch_size: u32,
+    resend: ResendPolicy,
     health: PublisherHealth,
 ) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        match run_once(database.pool(), &transport, batch_size).await {
+        match run_once(database.pool(), &transport, batch_size, resend).await {
             Ok(summary) => {
                 health.record(&summary);
                 if summary.failed > 0 || summary.undeliverable > 0 {

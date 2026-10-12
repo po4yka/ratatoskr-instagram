@@ -14,7 +14,7 @@ use async_nats::jetstream;
 use futures_util::StreamExt as _;
 use ratatoskr_instagram_archive::capture_resolution::{CaptureResolver, ResolutionPolicy};
 use ratatoskr_instagram_archive::permalink::CanonicalPermalink;
-use ratatoskr_instagram_archive::publishing::run_once;
+use ratatoskr_instagram_archive::publishing::{ResendPolicy, run_once};
 use ratatoskr_instagram_archive::test_support::TestDatabase;
 use ratatoskr_instagram_archive::{PublicSurface, SurfaceOutcome};
 use ratatoskr_instagram_archive_service::command_consumer::consume_one;
@@ -177,9 +177,14 @@ async fn a_platform_command_ends_in_queued_captured_and_succeeded_events() {
         "{resolved:?}"
     );
     let transport = NatsEventTransport::new(context.clone());
-    let pass = run_once(test.database.pool(), &transport, 16)
-        .await
-        .expect("the outbox pass runs");
+    let pass = run_once(
+        test.database.pool(),
+        &transport,
+        16,
+        ResendPolicy::default(),
+    )
+    .await
+    .expect("the outbox pass runs");
     assert_eq!((pass.delivered, pass.failed, pass.remaining), (3, 0, 0));
 
     let seen = tenant_events(&events, &format!("user:{user}")).await;
