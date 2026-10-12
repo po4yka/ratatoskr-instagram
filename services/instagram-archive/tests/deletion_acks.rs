@@ -124,7 +124,7 @@ async fn removal_of(database: &Database, owner: Uuid) -> Uuid {
         .tombstone_capture(
             capture_id,
             RemovalReason::UserRequested,
-            time::OffsetDateTime::now_utc(),
+            time::OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1_800_000_000),
         )
         .await
         .expect("the tombstone is recorded");
