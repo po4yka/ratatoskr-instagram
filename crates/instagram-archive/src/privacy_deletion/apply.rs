@@ -59,7 +59,7 @@ pub(super) async fn apply_target_rows(
         sqlx::query(
             "delete from instagram_archive.outbox_events \
              where aggregate_type = 'capture' and aggregate_id = $1 \
-               and event_type <> 'social.source.removed.v1'",
+               and not (event_type = 'social.source.removed.v1' and acknowledged_at is null)",
         )
         .bind(capture_id)
         .execute(&mut **transaction)
@@ -281,7 +281,7 @@ async fn apply_connection_rows(
         sqlx::query(
             "delete from instagram_archive.outbox_events \
              where aggregate_type = 'media' and aggregate_id = $1 \
-               and event_type <> 'social.source.removed.v1'",
+               and not (event_type = 'social.source.removed.v1' and acknowledged_at is null)",
         )
         .bind(media_id)
         .execute(&mut **transaction)

@@ -11,6 +11,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use ratatoskr_instagram_archive::privacy_deletion::{
+    DeletionRequest, DeletionStore, DeletionTarget,
+};
 use ratatoskr_instagram_archive::publishing::{
     AckOutcome, PassVerdict, REMOVAL_EVENT_TYPE, ResendPolicy, acknowledge, run_once,
 };
@@ -440,6 +443,158 @@ async fn the_database_refuses_acknowledgement_state_on_the_wrong_rows() {
         insert_with_ack_columns(&test, REMOVAL_EVENT_TYPE, true, Some("refused")).await,
         None,
         "a removal may carry a complete acknowledgement"
+    );
+    test.cleanup().await.expect("cleanup");
+}
+
+/// Inserts a published row of `event_type` for one aggregate, acknowledged or not.
+async fn insert_aggregate_row(
+    test: &TestDatabase,
+    aggregate_type: &str,
+    aggregate_id: Uuid,
+    event_type: &str,
+    acknowledged: bool,
+) -> Uuid {
+    let event_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into instagram_archive.outbox_events \
+         (event_id, event_type, aggregate_type, aggregate_id, payload, occurred_at, \
+          published_at, acknowledged_at, ack_outcome, next_resend_at) \
+         values ($1, $2, $3, $4, '{}', now(), now(), \
+                 case when $5 then now() end, case when $5 then 'applied' end, \
+                 case when $2 = 'social.source.removed.v1' then now() end)",
+    )
+    .bind(event_id)
+    .bind(event_type)
+    .bind(aggregate_type)
+    .bind(aggregate_id)
+    .bind(acknowledged)
+    .execute(test.database.pool())
+    .await
+    .expect("the aggregate row is inserted");
+    event_id
+}
+
+async fn surviving(test: &TestDatabase, aggregate_id: Uuid, ids: &[Uuid]) -> Vec<bool> {
+    let mut found = Vec::new();
+    for id in ids {
+        let exists: bool = sqlx::query_scalar(
+            "select exists(select 1 from instagram_archive.outbox_events \
+             where event_id = $1 and aggregate_id = $2)",
+        )
+        .bind(id)
+        .bind(aggregate_id)
+        .fetch_one(test.database.pool())
+        .await
+        .expect("the row lookup answers");
+        found.push(exists);
+    }
+    found
+}
+
+#[tokio::test]
+async fn a_later_privacy_deletion_keeps_the_unacknowledged_removal() {
+    let test = TestDatabase::create().await.expect("a disposable database");
+    let pool = test.database.pool();
+    let owner = Uuid::now_v7();
+    let store = DeletionStore::new(&test.database);
+
+    // The capture path: the owner's last capture of a source.
+    let capture_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into instagram_archive.captures \
+         (capture_id, user_ref, canonical_url, acquisition_method, saved_authority, \
+          client_source, status, captured_at) \
+         values ($1, $2, 'https://www.instagram.com/p/KEEPREM1/', 'share_extension', \
+          'explicit_user_capture', 'ios_share_extension', 'accepted', now())",
+    )
+    .bind(capture_id)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("the capture is stored");
+    let rows = [
+        insert_aggregate_row(
+            &test,
+            "capture",
+            capture_id,
+            "social.source.captured.v1",
+            false,
+        )
+        .await,
+        insert_aggregate_row(&test, "capture", capture_id, REMOVAL_EVENT_TYPE, true).await,
+        insert_aggregate_row(&test, "capture", capture_id, REMOVAL_EVENT_TYPE, false).await,
+    ];
+    store
+        .apply(DeletionRequest {
+            operation_id: Uuid::now_v7(),
+            user_ref: owner,
+            target: DeletionTarget::Capture(capture_id),
+        })
+        .await
+        .expect("the capture deletion succeeds");
+    assert_eq!(
+        surviving(&test, capture_id, &rows).await,
+        [false, false, true],
+        "the fact and the answered removal go; the unacknowledged removal stays"
+    );
+    let removals: i64 = sqlx::query_scalar(
+        "select count(*) from instagram_archive.outbox_events \
+         where aggregate_id = $1 and event_type = $2 and acknowledged_at is null",
+    )
+    .bind(capture_id)
+    .bind(REMOVAL_EVENT_TYPE)
+    .fetch_one(pool)
+    .await
+    .expect("the removal count answers");
+    assert_eq!(
+        removals, 2,
+        "the old unacknowledged removal and the new one"
+    );
+
+    // The media path: a connection's own media.
+    let account_id = Uuid::now_v7();
+    let media_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into instagram_archive.accounts \
+         (account_id, user_ref, provider_account_id, username, account_type, connection_status, \
+          scopes, connected_at) values ($1, $2, 'provider-keep-removal', 'redacted', \
+          'business', 'connected', array['instagram_business_basic'], now())",
+    )
+    .bind(account_id)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("the account is stored");
+    sqlx::query(
+        "insert into instagram_archive.media \
+         (media_id, account_id, provider_media_id, permalink, media_type, acquisition_method, \
+          saved_authority, upstream_status) values ($1, $2, 'keep-removal-1', \
+          'https://www.instagram.com/p/KEEPREM2/', 'image', 'official_api', \
+          'authoritative_platform_state', 'available')",
+    )
+    .bind(media_id)
+    .bind(account_id)
+    .execute(pool)
+    .await
+    .expect("the media is stored");
+    let rows = [
+        insert_aggregate_row(&test, "media", media_id, "social.source.updated.v1", false).await,
+        insert_aggregate_row(&test, "media", media_id, REMOVAL_EVENT_TYPE, true).await,
+        insert_aggregate_row(&test, "media", media_id, REMOVAL_EVENT_TYPE, false).await,
+    ];
+    store
+        .apply(DeletionRequest {
+            operation_id: Uuid::now_v7(),
+            user_ref: owner,
+            target: DeletionTarget::Connection(account_id),
+        })
+        .await
+        .expect("the connection deletion succeeds");
+    assert_eq!(
+        surviving(&test, media_id, &rows).await,
+        [false, false, true],
+        "the same rule holds on the own-media path"
     );
     test.cleanup().await.expect("cleanup");
 }
