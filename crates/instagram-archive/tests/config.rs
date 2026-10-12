@@ -1,7 +1,10 @@
 //! Configuration strictness: the executable form of the service-runtime spec.
 
+use std::time::Duration;
+
 use secrecy::ExposeSecret as _;
 
+use ratatoskr_instagram_archive::publishing::ResendPolicy;
 use ratatoskr_instagram_archive::{Config, StorageConfig};
 
 /// The broker endpoint the minimal valid configuration names.
@@ -574,4 +577,68 @@ fn public_resolution_reads_the_token_from_its_file_and_never_renders_it() {
             .contains("RATATOSKR__PUBLIC_RESOLUTION__ACCESS_TOKEN_PATH")
     );
     std::fs::remove_dir_all(&directory).expect("the scratch directory is removed");
+}
+
+#[test]
+fn the_tombstone_timing_is_strict_configuration() {
+    let defaults = Config::from_environment([BUS_URL, TOKEN_PATH]).expect("the defaults load");
+    assert_eq!(
+        (
+            defaults.tombstone.resend_after_seconds,
+            defaults.tombstone.resend_cap_seconds
+        ),
+        (600, 21_600)
+    );
+
+    let custom = Config::from_environment([
+        ("RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS", "45"),
+        ("RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS", "90"),
+        BUS_URL,
+        TOKEN_PATH,
+    ])
+    .expect("an in-range timing loads");
+    assert_eq!(
+        (
+            custom.tombstone.resend_after_seconds,
+            custom.tombstone.resend_cap_seconds
+        ),
+        (45, 90)
+    );
+    assert_eq!(
+        custom.tombstone.resend_policy(),
+        ResendPolicy::new(Duration::from_secs(45), Duration::from_secs(90))
+    );
+    for (after, cap) in [("30", "30"), ("86400", "604800")] {
+        Config::from_environment([
+            ("RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS", after),
+            ("RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS", cap),
+            BUS_URL,
+            TOKEN_PATH,
+        ])
+        .expect("the documented bounds are accepted");
+    }
+
+    for (key, value, other) in [
+        ("RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS", "29", None),
+        ("RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS", "86401", None),
+        ("RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS", "abc", None),
+        ("RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS", "604801", None),
+        (
+            "RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS",
+            "599",
+            Some(("RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS", "600")),
+        ),
+        ("RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS", "-1", None),
+    ] {
+        let mut entries = vec![(key, value), BUS_URL, TOKEN_PATH];
+        entries.extend(other);
+        let error =
+            Config::from_environment(entries).expect_err("an out-of-range timing is refused");
+        let rendered = error.to_string();
+        assert!(rendered.contains(key), "{rendered}");
+        assert!(
+            !rendered.contains(&format!("{value}\n")),
+            "values never render: {rendered}"
+        );
+    }
 }

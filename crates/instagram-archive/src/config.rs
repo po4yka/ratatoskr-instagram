@@ -15,10 +15,12 @@ use serde::Serialize;
 mod data_export;
 mod item9;
 mod public_resolution;
+mod publisher;
 
 pub use data_export::DataExportConfig;
 pub use item9::{BlobDeletionConfig, MediaRetentionConfig, ReResolutionConfig, ReprocessingConfig};
 pub use public_resolution::PublicResolutionConfig;
+pub use publisher::{PublisherConfig, TombstoneConfig};
 
 const ENV_PREFIX: &str = "RATATOSKR__";
 
@@ -37,6 +39,8 @@ pub struct Config {
     pub limits: Limits,
     /// Outbox publisher loop configuration.
     pub publisher: PublisherConfig,
+    /// Resend timing of an unacknowledged removal.
+    pub tombstone: TombstoneConfig,
     /// Disabled-by-default official Instagram OAuth configuration.
     pub oauth: OAuthConfig,
     /// Disabled-by-default connected-account own-media scheduler.
@@ -185,16 +189,6 @@ pub struct Limits {
     pub shutdown_timeout_ms: u64,
 }
 
-/// Outbox publisher loop configuration. The loop only runs when storage is
-/// configured; without a database there is nothing to publish.
-#[derive(Debug, Clone, Serialize)]
-pub struct PublisherConfig {
-    /// Milliseconds between publisher passes.
-    pub poll_interval_ms: u64,
-    /// Maximum facts claimed per pass.
-    pub batch_size: u32,
-}
-
 /// One configuration violation. The offending key and the rule it broke, and
 /// never the supplied value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,6 +280,7 @@ impl Config {
         validate_oauth(&config.oauth, &mut violations);
         validate_own_media(&config, &mut violations);
         config.data_export.validate(&mut violations);
+        publisher::validate(&config.tombstone, &mut violations);
         item9::validate(&config, &mut violations);
         public_resolution::validate(
             &config.public_resolution,
@@ -622,14 +617,13 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
             Ok(parsed) => config.limits.shutdown_timeout_ms = parsed,
             Err(rule) => violations.push(refused(rule)),
         },
-        "RATATOSKR__PUBLISHER__POLL_INTERVAL_MS" => match parse_positive::<u64>(value) {
-            Ok(parsed) => config.publisher.poll_interval_ms = parsed,
-            Err(rule) => violations.push(refused(rule)),
-        },
-        "RATATOSKR__PUBLISHER__BATCH_SIZE" => match parse_positive::<u32>(value) {
-            Ok(parsed) => config.publisher.batch_size = parsed,
-            Err(rule) => violations.push(refused(rule)),
-        },
+        key if key.starts_with("RATATOSKR__PUBLISHER__")
+            || key.starts_with("RATATOSKR__TOMBSTONE__") =>
+        {
+            if !publisher::apply_environment(config, key, value, violations) {
+                violations.push(refused("is not recognized"));
+            }
+        }
         "RATATOSKR__OAUTH__ENABLED" => match value {
             "true" => config.oauth.enabled = true,
             "false" => config.oauth.enabled = false,
@@ -777,10 +771,8 @@ impl Default for Config {
                 database_acquire_timeout_ms: 5_000,
                 shutdown_timeout_ms: 10_000,
             },
-            publisher: PublisherConfig {
-                poll_interval_ms: 1_000,
-                batch_size: 16,
-            },
+            publisher: PublisherConfig::default(),
+            tombstone: TombstoneConfig::default(),
             oauth: OAuthConfig {
                 enabled: false,
                 client_id: None,

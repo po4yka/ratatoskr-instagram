@@ -76,7 +76,7 @@ pub use command_capture::{
 };
 pub use config::{
     AdminConfig, BusConfig, Config, ConfigError, DataExportConfig, Limits, OAuthConfig,
-    PublicResolutionConfig, PublisherConfig, StorageConfig, TelemetryConfig,
+    PublicResolutionConfig, PublisherConfig, StorageConfig, TelemetryConfig, TombstoneConfig,
 };
 pub use database::{Database, PersistenceError};
 pub use permalink::{CanonicalPermalink, PermalinkError, PermalinkKind};

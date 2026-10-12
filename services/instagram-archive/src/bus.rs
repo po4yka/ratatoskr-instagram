@@ -14,7 +14,6 @@ use async_nats::jetstream;
 use futures_util::StreamExt as _;
 use ratatoskr_instagram_archive::capture_resolution::{CaptureResolver, ResolutionPolicy};
 use ratatoskr_instagram_archive::public_surface::HttpPublicSurface;
-use ratatoskr_instagram_archive::publishing::ResendPolicy;
 use ratatoskr_instagram_archive::{BusConfig, Config, Database, PublicResolutionConfig};
 use ratatoskr_instagram_archive_service::RuntimeState;
 use ratatoskr_instagram_archive_service::nats_transport::{NatsEventTransport, connect_bus};
@@ -107,6 +106,7 @@ impl BusLane {
         let transport = NatsEventTransport::new(self.context);
         let interval = Duration::from_millis(config.publisher.poll_interval_ms);
         let batch_size = config.publisher.batch_size;
+        let resend = config.tombstone.resend_policy();
         let publisher_health = runtime.publisher_health();
         tasks.spawn(async move {
             relay_outbox(
@@ -114,7 +114,7 @@ impl BusLane {
                 transport,
                 interval,
                 batch_size,
-                ResendPolicy::default(),
+                resend,
                 publisher_health,
             )
             .await;
