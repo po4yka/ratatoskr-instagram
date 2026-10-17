@@ -90,6 +90,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - run: cargo fetch --locked
+      - run: cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1
 
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -152,3 +153,4 @@ jobs:
         with:
           tool: cargo-deny
       - run: cargo deny --locked check
+      - run: cargo deny --config deny.toml --manifest-path fuzz/Cargo.toml --locked check

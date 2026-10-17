@@ -19,11 +19,11 @@ ratatoskr-instagram-archive         = { version = "=0.1.0", path = "crates/insta
 # Interim sanctioned form per ratatoskr-contracts README: a Cargo git dependency pinned to a
 # full commit SHA over https. The pin is the rev, not the transport; milestone 10 of the
 # contracts repository replaces it with a published version requirement.
-ratatoskr-social-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
-ratatoskr-event-envelope   = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
-ratatoskr-identifiers      = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
-ratatoskr-error-contracts  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
-ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "66bdb0c0545363f06137f13687084c21db9b27c5" }
+ratatoskr-social-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
+ratatoskr-event-envelope   = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
+ratatoskr-identifiers      = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
+ratatoskr-error-contracts  = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
+ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "1756034314a15d3a83d5c7d15b172da502990e98" }
 
 # ---- async runtime and HTTP ----
 tokio      = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -75,7 +75,7 @@ thiserror  = "2.0.20"
 # ---- content addressing ----
 # SHA-256 over preserved raw payloads; `blob_ref` carries its lowercase hex.
 sha2 = "0.10.9"
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 
 # ---- property testing for hostile inputs ----
 proptest = "1.11.0"

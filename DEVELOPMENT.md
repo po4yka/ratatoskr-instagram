@@ -34,6 +34,7 @@ keeps checking its invariants now that a manifest exists.
 
 ```bash
 cargo fetch --locked
+cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo build --workspace --locked
@@ -42,8 +43,11 @@ cargo test --workspace --locked --doc
 cargo build --workspace --locked --release
 ```
 
-`cargo deny --locked check` runs in its own `deny` job in `.github/workflows/ci.yml`, separate from
-the gate above, so a new RustSec advisory cannot hide a clippy or test failure behind it.
+`cargo deny --locked check` and `cargo deny --config deny.toml --manifest-path fuzz/Cargo.toml --locked check`
+run in the separate `deny` job in `.github/workflows/ci.yml`. Both graphs must pass the full
+repository policy. The exact libfuzzer-sys 0.4.13 license exception permits its bundled NCSA code;
+the global license allowlist and advisory rules stay unchanged. Review the exception when that
+tool version changes. A new RustSec advisory cannot hide a clippy or test failure behind it.
 
 `.github/workflows/ci.yml` runs this list against PostgreSQL 17 and an isolated NATS 2 JetStream
 fixture. `compose.yaml` exposes PostgreSQL on `127.0.0.1:5436` (user/password/database `instagram`)

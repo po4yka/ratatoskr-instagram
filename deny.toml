@@ -22,6 +22,13 @@ allow = [
 ]
 unused-allowed-license = "allow"
 
+# SEC-030 D5: owner-approved bundled libfuzzer license. Re-review on a version change.
+# The global allowlist stays unchanged; this exception applies only to this tool version.
+[[licenses.exceptions]]
+name = "libfuzzer-sys"
+version = "=0.4.13"
+allow = ["MIT", "Apache-2.0", "NCSA"]
+
 [bans]
 # Two versions of one crate is usually accidental rather than wrong, so this warns rather than
 # fails.
