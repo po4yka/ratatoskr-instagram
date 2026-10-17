@@ -5,5 +5,5 @@
 
 ## 2. Enforcement and publication
 
-- [ ] 2.1 Add both fuzz commands to the appropriate CI jobs and developer instructions; run the full repository gates and independent review. CI configuration and documentation have no behavioral RED.
-- [ ] 2.2 Publish the reviewed commit, wait for exact-commit CI and record the result in SEC-030 before workspace pin promotion. Publication metadata has no behavioral RED.
+- [x] 2.1 Add both fuzz commands to the appropriate CI jobs and developer instructions; run the full repository gates and independent review. CI configuration and documentation have no behavioral RED.
+- [x] 2.2 Publish the reviewed commit, wait for exact-commit CI and record the result in SEC-030 before workspace pin promotion. Publication metadata has no behavioral RED.
